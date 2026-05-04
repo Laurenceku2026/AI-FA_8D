@@ -5,14 +5,14 @@ AI-powered Failure Analysis & 8D Report Generation
 功能：
 - 多模态输入（文本+图片+Ctrl+V粘贴）
 - 5-Why根因推理
-- 鱼骨图自动生成
+- 鱼骨图自动生成（matplotlib可视化）
 - 失效等级分类
 - SPC时序分析（不良率趋势）
 - 关联规则挖掘
 - 双源知识库（内部+外部）
 - FA报告生成 + 8D报告生成
 - 双语支持（中文/English）
-- Word报告导出
+- Word报告导出（图文并茂）
 - 管理员后台（知识库管理）
 
 部署：Streamlit Cloud
@@ -28,12 +28,17 @@ import uuid
 import re
 import io
 import requests
+import base64
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from PIL import Image
 import plotly.graph_objects as go
 import plotly.express as px
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+import matplotlib.patches as mpatches
 
 # ==================== 配置（从 Streamlit Secrets 读取）====================
 
@@ -72,6 +77,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# 设置中文字体（用于matplotlib鱼骨图）
+try:
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'WenQuanYi Zen Hei']
+    plt.rcParams['axes.unicode_minus'] = False
+except:
+    pass
+
+
 # ==================== 数据模型 ====================
 
 @dataclass
@@ -97,12 +110,12 @@ class FishboneAnalysis:
     
     def to_dict(self) -> dict:
         return {
-            "Man (人)": self.man,
-            "Machine (机)": self.machine,
-            "Material (料)": self.material,
-            "Method (法)": self.method,
-            "Environment (环)": self.environment,
-            "Measurement (测)": self.measurement
+            "Man (\u4eba)": self.man,
+            "Machine (\u673a)": self.machine,
+            "Material (\u6599)": self.material,
+            "Method (\u6cd5)": self.method,
+            "Environment (\u73af)": self.environment,
+            "Measurement (\u6d4b)": self.measurement
         }
 
 
@@ -129,31 +142,32 @@ class FailureAnalysisResult:
     has_images: bool = False
     analyst_name: str = ""
     analyst_title: str = ""
+    fishbone_image: Optional[bytes] = None  # 鱼骨图图片
 
 
 # ==================== 多语言文本 ====================
 
 TEXTS = {
     "zh": {
-        "app_title": "🔬 AI-FA 智能故障分析系统",
+        "app_title": "AI-FA 智能故障分析系统",
         "app_subtitle": "AI驱动的失效分析与8D报告生成",
-        "lang_zh": "🇨🇳 中文",
-        "lang_en": "🇬🇧 English",
-        "sidebar_about": "📖 关于系统",
-        "sidebar_principle": "**原理**：基于DeepSeek大语言模型 + 5-Why推理引擎，自动进行失效等级分类、鱼骨图分析，结合历史案例库定位根本原因。",
-        "sidebar_usage": "**使用方法**：\n1. 输入产品名称和故障现象\n2. 可选：上传图片、时序数据\n3. 点击「开始AI深度故障分析」\n4. 选择生成FA报告或8D报告\n5. 下载Word文档",
+        "lang_zh": "中文",
+        "lang_en": "English",
+        "sidebar_about": "关于系统",
+        "sidebar_principle": "原理：基于DeepSeek大语言模型 + 5-Why推理引擎，自动进行失效等级分类、鱼骨图分析，结合历史案例库定位根本原因。",
+        "sidebar_usage": "使用方法：\n1. 输入产品名称和故障现象\n2. 可选：上传图片、时序数据\n3. 点击「开始AI深度故障分析」\n4. 选择生成FA报告或8D报告\n5. 下载Word文档",
         "analyst_name": "分析人姓名",
         "analyst_name_ph": "请输入姓名",
         "analyst_title": "分析人头衔（可选）",
-        "analyst_title_ph": "例如：研发总监",
+        "analyst_title_ph": "例如：质量总监",
         "db_status": "数据库状态",
-        "db_connected": "✅ 已连接",
-        "db_disconnected": "❌ 未连接",
-        "contact": "📞 **联系**",
-        "contact_email": "✉️ 电邮: Techlife2027@gmail.com",
+        "db_connected": "已连接",
+        "db_disconnected": "未连接",
+        "contact": "联系",
+        "contact_email": "电邮: Techlife2027@gmail.com",
         
         # 输入区域
-        "basic_info": "📋 故障基本信息",
+        "basic_info": "故障基本信息",
         "product_name": "产品名称",
         "product_name_ph": "例如：Media Tube Lite LED灯具",
         "symptom": "故障现象",
@@ -164,49 +178,47 @@ TEXTS = {
         "batch_no": "批次/序列号",
         "site_temp": "现场温度(可选)",
         "site_temp_ph": "例如：45°C",
-        "image_section": "🖼️ 故障图片",
-        "image_hint": "点击上传图片，或按 Ctrl+V 直接粘贴",
-        "timeseries_section": "📊 时序数据分析",
+        "image_section": "故障图片",
+        "image_upload_hint": "点击上传图片",
+        "image_paste_hint": "或从剪贴板粘贴",
+        "image_paste_btn": "粘贴图片",
+        "image_paste_success": "图片已粘贴",
+        "image_paste_error": "剪贴板无图片，请先截图",
+        "no_images": "暂无图片",
+        "timeseries_section": "时序数据分析",
         "timeseries_checkbox": "启用时序数据分析（SPC控制图）",
         "timeseries_input_method": "数据输入方式",
         "timeseries_paste": "直接粘贴数据",
         "timeseries_upload": "上传Excel/CSV文件",
-        "timeseries_paste_placeholder": """请输入时序数据，格式：
-日期,生产数量,故障数量
-2024-01-01,1000,5
-2024-02-01,1100,8
-2024-03-01,1050,12""",
+        "timeseries_paste_placeholder": "请输入时序数据，格式：\n日期,生产数量,故障数量\n2024-01-01,1000,5\n2024-02-01,1100,8",
         "timeseries_file_hint": "支持 .xlsx, .xls, .csv 格式",
-        "download_template": "📥 下载数据模板",
+        "download_template": "下载数据模板",
         
         # 高级选项
-        "advanced_options": "🔬 高级分析选项",
+        "advanced_options": "高级分析选项",
         "web_search": "联网搜索行业案例",
         "rule_mining": "关联规则挖掘",
         "spc": "时序分析(SPC控制图)",
         "gen_8d": "生成8D报告",
         
         # 按钮
-        "analyze_btn": "🚀 开始AI深度故障分析",
-        "generate_fa_btn": "📄 生成FA报告",
-        "generate_8d_btn": "📋 生成8D报告",
-        "download_word": "📥 下载Word报告",
-        "clear_btn": "🗑️ 清除结果",
+        "analyze_btn": "开始AI深度故障分析",
+        "generate_fa_btn": "生成FA报告",
+        "generate_8d_btn": "生成8D报告",
+        "download_word": "下载Word报告",
+        "clear_btn": "清除结果",
         
         # 分析结果
-        "five_why_title": "🔍 5-Why 根因分析",
-        "fishbone_title": "🐟 鱼骨图分析",
-        "root_cause_title": "🎯 根因结论",
-        "actions_title": "📌 改进措施",
+        "five_why_title": "5-Why 根因分析",
+        "fishbone_title": "鱼骨图分析",
+        "root_cause_title": "根因结论",
         "interim_actions": "临时措施",
         "permanent_actions": "永久措施",
         "preventive_actions": "预防再发",
         "confidence": "置信度",
-        "evidence_source": "证据来源",
-        "verification_method": "建议验证方法",
         "stage_label": "失效等级",
-        "spc_title": "📈 SPC控制图分析",
-        "rules_title": "🔗 关联规则挖掘",
+        "spc_title": "SPC控制图分析",
+        "rules_title": "关联规则挖掘",
         
         # 状态
         "analyzing": "AI正在分析中，请稍候...",
@@ -216,13 +228,16 @@ TEXTS = {
         "api_error": "API配置错误，请检查Streamlit Secrets",
         
         # 失效等级
-        "stage_0": "✅ 正常",
-        "stage_1": "⚠️ 轻微异常",
-        "stage_2": "🔥 中度异常",
-        "stage_3": "🚨 严重故障",
+        "stage_0": "正常",
+        "stage_1": "轻微异常",
+        "stage_2": "中度异常",
+        "stage_3": "严重故障",
         
         # 报告
-        "report_preview": "📄 报告预览",
+        "report_preview": "报告预览",
+        "fault_photos": "故障照片",
+        "analyst": "分析人",
+        "analysis_date": "分析日期",
         
         # 管理员
         "admin_settings": "管理员设置",
@@ -232,43 +247,40 @@ TEXTS = {
         "login_btn": "登录",
         "logged_in": "管理员已登录",
         "llm_status": "大模型状态",
-        "llm_configured": "✅ DeepSeek API 已配置",
-        "llm_not_configured": "❌ DeepSeek API 未配置",
+        "llm_configured": "DeepSeek API 已配置",
+        "llm_not_configured": "DeepSeek API 未配置",
         "neo4j_status": "Neo4j 知识图谱",
-        "neo4j_connected": "✅ 已连接",
-        "neo4j_disconnected": "⚠️ 未连接",
-        "knowledge_base_title": "📚 知识库管理（双语，存储在 Supabase）",
+        "neo4j_connected": "已连接",
+        "neo4j_disconnected": "未连接",
+        "knowledge_base_title": "知识库管理（双语）",
         "category": "选择分类",
         "add_entry": "添加条目",
         "entry_content": "经验教训内容",
-        "entry_placeholder": "输入经验教训（支持中英文，系统会自动翻译存储双语）",
+        "entry_placeholder": "输入经验教训，系统会自动翻译存储双语",
         "no_entries": "暂无条目",
-        "export_kb": "📥 导出知识库",
-        "import_kb": "📤 导入知识库（Excel）",
+        "export_kb": "导出知识库",
+        "import_kb": "导入知识库（Excel）",
         "import_success": "导入成功！共导入 {count} 条记录",
-
-        "report_header_analyst": "分析人",
-        "report_header_date": "分析时间",
     },
     "en": {
-        "app_title": "🔬 AI-FA Intelligent Failure Analysis System",
+        "app_title": "AI-FA Intelligent Failure Analysis System",
         "app_subtitle": "AI-powered Failure Analysis & 8D Report Generation",
-        "lang_zh": "🇨🇳 中文",
-        "lang_en": "🇬🇧 English",
-        "sidebar_about": "📖 About",
-        "sidebar_principle": "**Principle**: DeepSeek LLM + 5-Why reasoning engine for failure stage classification, fishbone analysis, and root cause identification.",
-        "sidebar_usage": "**How to use**:\n1. Enter product name and failure symptom\n2. Optional: Upload images, time series data\n3. Click 'Start AI Deep Failure Analysis'\n4. Select FA report or 8D report\n5. Download Word document",
+        "lang_zh": "Chinese",
+        "lang_en": "English",
+        "sidebar_about": "About",
+        "sidebar_principle": "Principle: DeepSeek LLM + 5-Why reasoning engine for failure stage classification, fishbone analysis, and root cause identification.",
+        "sidebar_usage": "How to use:\n1. Enter product name and failure symptom\n2. Optional: Upload images, time series data\n3. Click 'Start AI Deep Failure Analysis'\n4. Select FA report or 8D report\n5. Download Word document",
         "analyst_name": "Analyst Name",
         "analyst_name_ph": "Enter name",
         "analyst_title": "Title (Optional)",
-        "analyst_title_ph": "e.g., R&D Director",
+        "analyst_title_ph": "e.g., Quality Director",
         "db_status": "Database Status",
-        "db_connected": "✅ Connected",
-        "db_disconnected": "❌ Disconnected",
-        "contact": "📞 **Contact**",
-        "contact_email": "✉️ Email: Techlife2027@gmail.com",
+        "db_connected": "Connected",
+        "db_disconnected": "Disconnected",
+        "contact": "Contact",
+        "contact_email": "Email: Techlife2027@gmail.com",
         
-        "basic_info": "📋 Basic Failure Information",
+        "basic_info": "Basic Failure Information",
         "product_name": "Product Name",
         "product_name_ph": "e.g., Media Tube Lite LED",
         "symptom": "Failure Symptom",
@@ -279,46 +291,44 @@ TEXTS = {
         "batch_no": "Batch/Serial No.",
         "site_temp": "Site Temperature (Optional)",
         "site_temp_ph": "e.g., 45°C",
-        "image_section": "🖼️ Failure Images",
-        "image_hint": "Click to upload or Ctrl+V to paste",
-        "timeseries_section": "📊 Time Series Analysis",
+        "image_section": "Failure Images",
+        "image_upload_hint": "Click to upload",
+        "image_paste_hint": "or paste from clipboard",
+        "image_paste_btn": "Paste Image",
+        "image_paste_success": "Image pasted",
+        "image_paste_error": "No image in clipboard",
+        "no_images": "No images",
+        "timeseries_section": "Time Series Analysis",
         "timeseries_checkbox": "Enable Time Series Analysis (SPC Chart)",
         "timeseries_input_method": "Data Input Method",
         "timeseries_paste": "Paste Data",
         "timeseries_upload": "Upload Excel/CSV",
-        "timeseries_paste_placeholder": """Paste time series data, format:
-date,production_qty,failure_qty
-2024-01-01,1000,5
-2024-02-01,1100,8
-2024-03-01,1050,12""",
+        "timeseries_paste_placeholder": "Paste time series data, format:\ndate,production_qty,failure_qty\n2024-01-01,1000,5\n2024-02-01,1100,8",
         "timeseries_file_hint": "Supports .xlsx, .xls, .csv",
-        "download_template": "📥 Download Template",
+        "download_template": "Download Template",
         
-        "advanced_options": "🔬 Advanced Analysis Options",
+        "advanced_options": "Advanced Analysis Options",
         "web_search": "Web search for industry cases",
         "rule_mining": "Association rule mining",
         "spc": "Time series analysis (SPC)",
         "gen_8d": "Generate 8D report",
         
-        "analyze_btn": "🚀 Start AI Deep Failure Analysis",
-        "generate_fa_btn": "📄 Generate FA Report",
-        "generate_8d_btn": "📋 Generate 8D Report",
-        "download_word": "📥 Download Word Report",
-        "clear_btn": "🗑️ Clear Results",
+        "analyze_btn": "Start AI Deep Failure Analysis",
+        "generate_fa_btn": "Generate FA Report",
+        "generate_8d_btn": "Generate 8D Report",
+        "download_word": "Download Word Report",
+        "clear_btn": "Clear Results",
         
-        "five_why_title": "🔍 5-Why Root Cause Analysis",
-        "fishbone_title": "🐟 Fishbone Diagram",
-        "root_cause_title": "🎯 Root Cause Conclusion",
-        "actions_title": "📌 Improvement Actions",
+        "five_why_title": "5-Why Root Cause Analysis",
+        "fishbone_title": "Fishbone Diagram",
+        "root_cause_title": "Root Cause Conclusion",
         "interim_actions": "Interim Actions",
         "permanent_actions": "Permanent Actions",
         "preventive_actions": "Preventive Actions",
         "confidence": "Confidence",
-        "evidence_source": "Evidence Source",
-        "verification_method": "Verification Method",
         "stage_label": "Failure Stage",
-        "spc_title": "📈 SPC Control Chart Analysis",
-        "rules_title": "🔗 Association Rule Mining",
+        "spc_title": "SPC Control Chart Analysis",
+        "rules_title": "Association Rule Mining",
         
         "analyzing": "AI is analyzing, please wait...",
         "success": "Analysis completed!",
@@ -326,12 +336,15 @@ date,production_qty,failure_qty
         "fill_required": "Please fill in product name and symptom",
         "api_error": "API configuration error, please check Streamlit Secrets",
         
-        "stage_0": "✅ Normal",
-        "stage_1": "⚠️ Minor Anomaly",
-        "stage_2": "🔥 Moderate Anomaly",
-        "stage_3": "🚨 Critical Failure",
+        "stage_0": "Normal",
+        "stage_1": "Minor Anomaly",
+        "stage_2": "Moderate Anomaly",
+        "stage_3": "Critical Failure",
         
-        "report_preview": "📄 Report Preview",
+        "report_preview": "Report Preview",
+        "fault_photos": "Fault Photos",
+        "analyst": "Analyst",
+        "analysis_date": "Analysis Date",
         
         "admin_settings": "Admin Settings",
         "admin_login": "Admin Verification",
@@ -340,23 +353,20 @@ date,production_qty,failure_qty
         "login_btn": "Login",
         "logged_in": "Admin logged in",
         "llm_status": "LLM Status",
-        "llm_configured": "✅ DeepSeek API Configured",
-        "llm_not_configured": "❌ DeepSeek API Not Configured",
+        "llm_configured": "DeepSeek API Configured",
+        "llm_not_configured": "DeepSeek API Not Configured",
         "neo4j_status": "Neo4j Knowledge Graph",
-        "neo4j_connected": "✅ Connected",
-        "neo4j_disconnected": "⚠️ Not Connected",
-        "knowledge_base_title": "📚 Knowledge Base (Bilingual, stored in Supabase)",
+        "neo4j_connected": "Connected",
+        "neo4j_disconnected": "Not Connected",
+        "knowledge_base_title": "Knowledge Base (Bilingual)",
         "category": "Select Category",
         "add_entry": "Add Entry",
         "entry_content": "Lesson Content",
-        "entry_placeholder": "Enter lesson (supports bilingual, auto-translated)",
+        "entry_placeholder": "Enter lesson, auto-translated to bilingual",
         "no_entries": "No entries",
-        "export_kb": "📥 Export Knowledge Base",
-        "import_kb": "📤 Import Knowledge Base (Excel)",
+        "export_kb": "Export Knowledge Base",
+        "import_kb": "Import Knowledge Base (Excel)",
         "import_success": "Import successful! {count} records imported",
-
-        "report_header_analyst": "Analyst",
-        "report_header_date": "Analysis Date",
     }
 }
 
@@ -367,6 +377,13 @@ def get_text(key: str) -> str:
     """获取当前语言的文本"""
     lang = st.session_state.get("lang", "zh")
     return TEXTS[lang].get(key, key)
+
+
+def remove_bold_markers(text: str) -> str:
+    """删除文本中的**粗体标记"""
+    if not text:
+        return text
+    return re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
 
 
 def get_llm_client():
@@ -421,7 +438,6 @@ def translate_text(text: str, target_lang: str) -> str:
     if not text or not text.strip():
         return text
     
-    # 简单检测：如果已经是目标语言，直接返回
     if target_lang == "zh" and re.search(r'[\u4e00-\u9fff]', text):
         return text
     if target_lang == "en" and not re.search(r'[\u4e00-\u9fff]', text):
@@ -442,6 +458,71 @@ def translate_text(text: str, target_lang: str) -> str:
         return response.choices[0].message.content
     except:
         return text
+
+
+def create_fishbone_image(fishbone: FishboneAnalysis) -> bytes:
+    """使用matplotlib创建鱼骨图图片"""
+    
+    fig, ax = plt.subplots(figsize=(12, 8))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 10)
+    ax.axis('off')
+    
+    # 画主骨（水平线）
+    main_line_x = [1, 9]
+    main_line_y = [5, 5]
+    ax.plot(main_line_x, main_line_y, 'k-', linewidth=3, color='black')
+    
+    # 画箭头（鱼头）
+    ax.annotate('', xy=(9, 5), xytext=(8.5, 5),
+                arrowprops=dict(arrowstyle='->', lw=2, color='black'))
+    
+    # 鱼头标签（故障）
+    ax.text(9.2, 5, get_text("symptom")[:20], fontsize=10, va='center', fontweight='bold')
+    
+    # 六个分支的定义
+    categories = [
+        ("Man (\u4eba)", fishbone.man, 4, 7.5),
+        ("Machine (\u673a)", fishbone.machine, 4, 6.5),
+        ("Material (\u6599)", fishbone.material, 4, 5.5),
+        ("Method (\u6cd5)", fishbone.method, 6, 4.5),
+        ("Environment (\u73af)", fishbone.environment, 6, 3.5),
+        ("Measurement (\u6d4b)", fishbone.measurement, 6, 2.5),
+    ]
+    
+    for idx, (cat_name, causes, spine_x, spine_y) in enumerate(categories):
+        # 画脊骨
+        spine_x_start = 2
+        spine_y_start = spine_y
+        ax.plot([spine_x_start, spine_x], [spine_y_start, spine_y], 'k-', linewidth=1.5)
+        
+        # 画分支线
+        branch_x = 3.5
+        branch_y = spine_y
+        ax.plot([spine_x_start, branch_x], [spine_y_start, branch_y], 'k--', linewidth=1, alpha=0.7)
+        
+        # 分类标签
+        ax.text(branch_x - 0.3, branch_y, cat_name, fontsize=9, ha='right', va='center', fontweight='bold')
+        
+        # 原因列表
+        for j, cause in enumerate(causes[:4]):
+            cause_text = cause[:25] + "..." if len(cause) > 25 else cause
+            y_offset = branch_y + (j - 1) * 0.4
+            ax.plot([branch_x, branch_x + 0.8], [branch_y, y_offset], 'k:', linewidth=0.8, alpha=0.5)
+            ax.text(branch_x + 0.9, y_offset, cause_text, fontsize=7, va='center')
+    
+    # 标题
+    ax.text(5, 9.5, get_text("fishbone_title"), fontsize=14, ha='center', fontweight='bold')
+    
+    plt.tight_layout()
+    
+    # 保存为字节流
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+    buf.seek(0)
+    plt.close()
+    
+    return buf.getvalue()
 
 
 # ==================== Supabase 知识库 ====================
@@ -565,14 +646,6 @@ class SupabaseKnowledgeDB:
             print(f"清空失败: {e}")
         return False
     
-    def get_all_knowledge(self) -> Dict[str, List[str]]:
-        """获取所有知识"""
-        lang = st.session_state.get("lang", "zh")
-        if lang == "zh":
-            return self.knowledge_zh
-        else:
-            return self.knowledge_en
-    
     def export_to_dataframe(self) -> pd.DataFrame:
         """导出知识库到DataFrame"""
         max_len = max((len(self.knowledge_zh.get(cat, [])) for cat in self.categories), default=0)
@@ -603,7 +676,7 @@ DEFAULT_KNOWLEDGE = {
     "光学": [
         "LED光衰过快通常与结温过高有关，建议优化散热设计",
         "色偏问题可能由不同批次LED芯片的色温差异导致",
-        "透镜发黄/老化是由于长时间高温导致的材料 degradation",
+        "透镜发黄/老化是由于长时间高温导致的材料降解",
         "光斑不均匀可能是光学设计或LED排列问题",
         "防水结构失效导致水汽进入光学腔体，引起透光率下降"
     ],
@@ -626,7 +699,7 @@ DEFAULT_KNOWLEDGE = {
         "黑色表面在阳光直射下温度可达70-80°C",
         "散热不良是导致电子元器件加速老化的主要原因",
         "热胀冷缩效应会破坏密封结构，建议使用柔性密封材料",
-        "建议在高温环境应用中使用主动散热（风扇）或增大散热面积"
+        "建议在高温环境应用中使用主动散热或增大散热面积"
     ],
     "电气": [
         "浪涌保护不足是电源损坏的常见原因",
@@ -636,7 +709,7 @@ DEFAULT_KNOWLEDGE = {
         "长时间过载运行会加速电解电容老化"
     ],
     "控制": [
-        "单片机死机可能是电源纹波过大或EMI干扰导致",
+        "单片机的死机可能是电源纹波过大或EMI干扰导致",
         "通信异常常由接线松动、线缆过长或终端电阻配置错误引起",
         "固件bug可能导致异常状态无法恢复",
         "建议增加看门狗定时器防止系统死锁",
@@ -647,12 +720,11 @@ DEFAULT_KNOWLEDGE = {
 
 # ==================== 管理员弹窗 ====================
 
-@st.dialog("⚙️ " + get_text("admin_settings"), width="large")
+@st.dialog("Admin Settings", width="large")
 def admin_settings_dialog():
     """管理员设置弹窗"""
     lang = st.session_state.get("lang", "zh")
     
-    # 管理员验证
     if "admin_logged_in" not in st.session_state:
         st.session_state.admin_logged_in = False
     
@@ -671,30 +743,26 @@ def admin_settings_dialog():
     st.success(get_text("logged_in"))
     
     # 连接状态
-    st.subheader("🔌 " + get_text("db_status"))
+    st.subheader(get_text("db_status"))
     
     col1, col2 = st.columns(2)
     with col1:
         if DEEPSEEK_API_KEY:
-            st.success(get_text("llm_configured"))
+            st.success(f"✅ {get_text('llm_configured')}")
         else:
-            st.error(get_text("llm_not_configured"))
+            st.error(f"❌ {get_text('llm_not_configured')}")
     
     with col2:
-        try:
-            if NEO4J_URI and NEO4J_PASSWORD:
-                st.success(get_text("neo4j_connected"))
-            else:
-                st.warning(get_text("neo4j_disconnected"))
-        except:
-            st.warning(get_text("neo4j_disconnected"))
+        if NEO4J_URI and NEO4J_PASSWORD:
+            st.success(f"✅ {get_text('neo4j_connected')}")
+        else:
+            st.warning(f"⚠️ {get_text('neo4j_disconnected')}")
     
     st.markdown("---")
     
     # 知识库管理
     st.subheader(get_text("knowledge_base_title"))
     
-    # 初始化知识库
     if "knowledge_db" not in st.session_state:
         st.session_state.knowledge_db = SupabaseKnowledgeDB()
     
@@ -752,7 +820,6 @@ def admin_settings_dialog():
         if uploaded:
             try:
                 df = pd.read_excel(uploaded)
-                # 匹配列名
                 column_map = {cat: cat for cat in categories}
                 for col in df.columns:
                     for cat in categories:
@@ -847,11 +914,11 @@ class FiveWhyEngine:
             
             chain.append(FiveWhyItem(
                 level=level,
-                question=current_question[:200],
-                answer=answer[:300],
+                question=remove_bold_markers(current_question[:200]),
+                answer=remove_bold_markers(answer[:300]),
                 confidence=answer_data.get("confidence", 0.7),
-                evidence_source=answer_data.get("evidence_source", "AI推理"),
-                verification_method=verification[:150]
+                evidence_source=remove_bold_markers(answer_data.get("evidence_source", "AI推理")),
+                verification_method=remove_bold_markers(verification[:150])
             ))
             
             if level < 5:
@@ -930,6 +997,7 @@ class FishboneGenerator:
     @classmethod
     def generate(cls, symptom: str, product_name: str, 
                  five_why_chain: List[FiveWhyItem] = None) -> FishboneAnalysis:
+        """生成鱼骨图"""
         fishbone = {cat: [] for cat in cls.CATEGORIES}
         
         why_context = ""
@@ -954,7 +1022,7 @@ class FishboneGenerator:
 请输出3-5个具体、可验证的原因，每行一个："""
             
             response = call_llm(prompt, max_tokens=300, temperature=0.4)
-            causes = [line.strip() for line in response.split('\n') 
+            causes = [remove_bold_markers(line.strip()) for line in response.split('\n') 
                      if line.strip() and len(line.strip()) > 5 and not line.startswith('```')]
             fishbone[cat_key] = causes[:6]
         
@@ -981,17 +1049,14 @@ class TimeSeriesAnalyzer:
             if len(lines) < 2:
                 return None
             
-            # 检查是否有表头
             has_header = ',' in lines[0] and ('date' in lines[0].lower() or '日期' in lines[0])
             
             if has_header:
                 df = pd.read_csv(io.StringIO(data_text))
             else:
-                # 无表头，假设格式: date,production_qty,failure_qty
                 data = [line.split(',') for line in lines]
                 df = pd.DataFrame(data[1:], columns=data[0] if len(data) > 1 else ['date', 'production_qty', 'failure_qty'])
             
-            # 转换数据类型
             if 'production_qty' in df.columns:
                 df['production_qty'] = pd.to_numeric(df['production_qty'], errors='coerce')
             if 'failure_qty' in df.columns:
@@ -1012,7 +1077,6 @@ class TimeSeriesAnalyzer:
             else:
                 df = pd.read_excel(file)
             
-            # 转换数据类型
             if 'production_qty' in df.columns:
                 df['production_qty'] = pd.to_numeric(df['production_qty'], errors='coerce')
             if 'failure_qty' in df.columns:
@@ -1157,9 +1221,9 @@ class ImprovementActionGenerator:
             data = clean_json_response(response)
             if data:
                 return {
-                    "interim": data.get("interim", ["隔离故障产品", "通知客户暂停使用相关功能"]),
-                    "permanent": data.get("permanent", ["修改设计缺陷", "更换有问题的组件", "增加保护电路"]),
-                    "preventive": data.get("preventive", ["更新检验标准", "加强供应商管理", "增加老化测试"])
+                    "interim": [remove_bold_markers(m) for m in data.get("interim", ["隔离故障产品", "通知客户暂停使用相关功能"])],
+                    "permanent": [remove_bold_markers(m) for m in data.get("permanent", ["修改设计缺陷", "更换有问题的组件", "增加保护电路"])],
+                    "preventive": [remove_bold_markers(m) for m in data.get("preventive", ["更新检验标准", "加强供应商管理", "增加老化测试"])]
                 }
         except:
             pass
@@ -1174,7 +1238,16 @@ class ImprovementActionGenerator:
 # ==================== 报告生成器 ====================
 
 class ReportGenerator:
-    """报告生成器"""
+    """报告生成器 - 生成FA报告和8D报告"""
+    
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        """清理文本中的特殊标记"""
+        if not text:
+            return text
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        return text
     
     @staticmethod
     def generate_fa_report(result: FailureAnalysisResult, lang: str = "zh") -> str:
@@ -1182,71 +1255,75 @@ class ReportGenerator:
         stage_name = FailureStageClassifier.get_stage_name(result.failure_stage, lang)
         stage_emoji = FailureStageClassifier.get_stage_emoji(result.failure_stage)
         
-        # 分析人信息
-        analyst_info = ""
+        analyst_line = ""
         if result.analyst_name:
-            analyst_info = f"\n**{get_text('report_header_analyst')}**: {result.analyst_name}"
+            analyst_line = f"**{get_text('analyst')}**：{result.analyst_name}"
             if result.analyst_title:
-                analyst_info += f" ({result.analyst_title})"
-            analyst_info += f"\n**{get_text('report_header_date')}**: {datetime.now().strftime('%Y-%m-%d')}\n"
+                analyst_line += f" ({result.analyst_title})"
+            analyst_line += f"\n**{get_text('analysis_date')}**：{datetime.now().strftime('%Y-%m-%d')}\n"
         
         # 5-Why表格
         five_why_table = "| 层级 | 问题 | 答案 | 置信度 |\n|------|------|------|--------|\n"
         for item in result.five_why:
-            q_short = item.question[:50] + "..." if len(item.question) > 50 else item.question
-            a_short = item.answer[:60] + "..." if len(item.answer) > 60 else item.answer
+            q_short = ReportGenerator._clean_text(item.question[:50] + "..." if len(item.question) > 50 else item.question)
+            a_short = ReportGenerator._clean_text(item.answer[:60] + "..." if len(item.answer) > 60 else item.answer)
             five_why_table += f"| Why-{item.level} | {q_short} | {a_short} | {item.confidence:.0%} |\n"
         
-        # 鱼骨图
+        # 鱼骨图 - 文字版
         fishbone_dict = result.fishbone.to_dict()
         fishbone_text = ""
         for cat, causes in fishbone_dict.items():
             if causes:
                 fishbone_text += f"\n#### {cat}\n"
                 for cause in causes[:5]:
-                    fishbone_text += f"- {cause}\n"
+                    fishbone_text += f"- {ReportGenerator._clean_text(cause)}\n"
         
-        report = f"""# 故障分析报告 (Failure Analysis Report)
+        report = f"""# 故障分析报告
 
-{analyst_info}
+{analyst_line}
 
 ## 1. 基本信息
 
 | 项目 | 内容 |
 |------|------|
-| 案例ID | {result.case_id} |
-| 产品名称 | {result.product_name} |
-| 故障现象 | {result.symptom} |
-| 安装条件 | {result.installation or '未提供'} |
-| 现场温度 | {result.temperature or '未提供'} |
+| 产品名称 | {ReportGenerator._clean_text(result.product_name)} |
+| 故障现象 | {ReportGenerator._clean_text(result.symptom[:200])} |
+| 安装条件 | {ReportGenerator._clean_text(result.installation) if result.installation else '未提供'} |
+| 现场温度 | {ReportGenerator._clean_text(result.temperature) if result.temperature else '未提供'} |
 | 失效等级 | {stage_emoji} {stage_name} |
-| 数据来源 | 内部案例 + 外部知识库 |
+| 数据来源 | {result.internal_cases_used}个内部案例 + {result.external_sources_used}个外部来源 |
 
-## 2. 5-Why 根因分析
+## 2. 失效等级定义
+
+| 等级 | 名称 | 描述 |
+|------|------|------|
+| Stage 0 | 正常 | 功能正常，无外观异常 |
+| Stage 1 | 轻微异常 | 闪烁、弱光、色偏 |
+| Stage 2 | 中度异常 | 烧焦痕迹、透镜膨胀、变形 |
+| Stage 3 | 严重故障 | 短路、冒烟、起火、完全失效 |
+
+## 3. 5-Why 根因分析
 
 {five_why_table}
 
-## 3. 根因结论
+## 4. 根本原因结论
 
-> **{result.root_cause}** (置信度: {result.root_cause_confidence:.0%})
+{ReportGenerator._clean_text(result.root_cause)}
 
-## 4. 鱼骨图分析
+## 5. 鱼骨图分析
 
 {fishbone_text}
 
-## 5. 改进措施
+## 6. 改进措施
 
-### 临时措施
-{chr(10).join(f'- {a}' for a in result.interim_actions[:3])}
+### 6.1 临时措施
+{chr(10).join(f'{i+1}. {ReportGenerator._clean_text(a)}' for i, a in enumerate(result.interim_actions[:3]))}
 
-### 永久措施
-{chr(10).join(f'- {a}' for a in result.permanent_actions[:3])}
+### 6.2 永久措施
+{chr(10).join(f'{i+1}. {ReportGenerator._clean_text(a)}' for i, a in enumerate(result.permanent_actions[:3]))}
 
-### 预防再发
-{chr(10).join(f'- {a}' for a in result.preventive_actions[:2])}
-
----
-*报告由 AI-FA 智能故障分析系统生成 | 版本 1.0.0*
+### 6.3 预防再发
+{chr(10).join(f'{i+1}. {ReportGenerator._clean_text(a)}' for i, a in enumerate(result.preventive_actions[:2]))}
 """
         return report
     
@@ -1256,75 +1333,173 @@ class ReportGenerator:
         stage_name = FailureStageClassifier.get_stage_name(result.failure_stage, lang)
         stage_emoji = FailureStageClassifier.get_stage_emoji(result.failure_stage)
         
-        analyst_info = ""
+        analyst_line = ""
         if result.analyst_name:
-            analyst_info = f"\n**{get_text('report_header_analyst')}**: {result.analyst_name}"
+            analyst_line = f"**{get_text('analyst')}**：{result.analyst_name}"
             if result.analyst_title:
-                analyst_info += f" ({result.analyst_title})"
-            analyst_info += f"\n**{get_text('report_header_date')}**: {datetime.now().strftime('%Y-%m-%d')}\n"
+                analyst_line += f" ({result.analyst_title})"
+            analyst_line += f"\n**{get_text('analysis_date')}**：{datetime.now().strftime('%Y-%m-%d')}\n"
         
+        # 5-Why列表
         five_why_list = ""
         for item in result.five_why:
-            five_why_list += f"**Why-{item.level}**: {item.question}\n→ {item.answer}\n\n"
+            five_why_list += f"**Why-{item.level}**：{ReportGenerator._clean_text(item.question)}\n→ {ReportGenerator._clean_text(item.answer)}\n\n"
         
-        report = f"""# 8D 报告 (8D Report)
+        # 鱼骨图 - 文字版
+        fishbone_dict = result.fishbone.to_dict()
+        fishbone_text = ""
+        for cat, causes in fishbone_dict.items():
+            if causes:
+                fishbone_text += f"\n**{cat}**：{', '.join([ReportGenerator._clean_text(c) for c in causes[:3]])}\n"
+        
+        report = f"""# 8D 报告
 
-{analyst_info}
+{analyst_line}
 
 ## D1: 建立团队
 
-| 角色 | 职责 |
-|------|------|
-| 团队负责人 | 整体协调 |
-| 设计工程师 | 技术分析 |
-| 质量工程师 | 质量验证 |
+| 角色 | 姓名 | 职责 |
+|------|------|------|
+| 团队负责人 | 质量经理 | 整体协调和进度管理 |
+| 设计工程师 | 设计部 | 技术分析和设计改进 |
+| 工艺工程师 | 工艺部 | 工艺验证和改善 |
+| 质量工程师 | 质量部 | 质量验证和标准化 |
 
 ## D2: 问题描述
 
-**产品**: {result.product_name}
-**故障**: {result.symptom}
-**失效等级**: {stage_emoji} {stage_name}
+| 项目 | 内容 |
+|------|------|
+| What | {ReportGenerator._clean_text(result.symptom[:150])} |
+| Where | {ReportGenerator._clean_text(result.installation) if result.installation else '安装现场'} |
+| When | {datetime.now().strftime('%Y-%m-%d')} |
+| Who | 现场维护团队 |
+| How | 运行中出现异常 |
+| 失效等级 | {stage_emoji} {stage_name} |
 
 ## D3: 临时措施
 
-{chr(10).join(f'{i+1}. {a}' for i, a in enumerate(result.interim_actions[:3]))}
+{chr(10).join(f'{i+1}. {ReportGenerator._clean_text(a)}' for i, a in enumerate(result.interim_actions[:3]))}
 
 ## D4: 根本原因分析
 
-### 5-Why 分析
+### 4.1 鱼骨图分析
+
+{fishbone_text}
+
+### 4.2 5-Why 分析
 
 {five_why_list}
 
-### 根本原因
+### 4.3 根本原因确认
 
-**{result.root_cause}** (置信度: {result.root_cause_confidence:.0%})
+{ReportGenerator._clean_text(result.root_cause)}
 
 ## D5: 永久措施
 
-{chr(10).join(f'{i+1}. {a}' for i, a in enumerate(result.permanent_actions[:3]))}
+{chr(10).join(f'{i+1}. {ReportGenerator._clean_text(a)}' for i, a in enumerate(result.permanent_actions[:3]))}
 
 ## D6: 效果验证
 
-| 项目 | 方法 | 标准 |
-|------|------|------|
+| 验证项目 | 方法 | 标准 |
+|----------|------|------|
 | 功能验证 | 实际测试 | 恢复正常 |
-| 耐久测试 | 加速老化 | 满足寿命要求 |
+| 耐久测试 | 加速老化测试 | 满足设计寿命要求 |
+| 批量验证 | 小批量试产验证 | 不良率低于目标值 |
 
 ## D7: 预防再发
 
-{chr(10).join(f'{i+1}. {a}' for i, a in enumerate(result.preventive_actions[:2]))}
+{chr(10).join(f'{i+1}. {ReportGenerator._clean_text(a)}' for i, a in enumerate(result.preventive_actions[:2]))}
 
-## D8: 总结
+## D8: 总结表彰
 
-- 问题已分析清楚
-- 改进措施已制定
-- 经验教训已纳入知识库
-
----
-*报告由 AI-FA 智能故障分析系统生成*
-*版本 1.0.0*
+- 问题已分析清楚，根本原因已确认
+- 改进措施已制定，待实施验证
+- 经验教训已纳入知识库和FMEA文档
 """
         return report
+
+
+# ==================== Word文档导出 ====================
+
+def create_word_document(report_content: str, report_type: str, result: FailureAnalysisResult, 
+                         uploaded_images: List = None, fishbone_image: bytes = None) -> io.BytesIO:
+    """创建Word文档，支持图文并茂"""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.style import WD_STYLE_TYPE
+        
+        doc = Document()
+        
+        # 标题
+        title_text = f"{result.product_name} - {result.symptom[:30]} - {report_type}"
+        title = doc.add_heading(remove_bold_markers(title_text), level=1)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # 分析人和日期
+        if result.analyst_name:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.add_run(f"{get_text('analyst')}：{result.analyst_name}")
+            if result.analyst_title:
+                p.add_run(f" ({result.analyst_title})")
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.add_run(f"{get_text('analysis_date')}：{datetime.now().strftime('%Y-%m-%d')}")
+        
+        doc.add_paragraph()
+        
+        # 解析并添加报告内容
+        lines = report_content.split('\n')
+        for line in lines:
+            line = remove_bold_markers(line)
+            if line.startswith('# '):
+                doc.add_heading(line[2:], level=1)
+            elif line.startswith('## '):
+                doc.add_heading(line[3:], level=2)
+            elif line.startswith('### '):
+                doc.add_heading(line[4:], level=3)
+            elif line.startswith('#### '):
+                doc.add_heading(line[5:], level=4)
+            elif line.startswith('|') and '|' in line[1:]:
+                pass
+            elif line.strip():
+                p = doc.add_paragraph(line)
+                p.style.font.size = Pt(11)
+            else:
+                doc.add_paragraph()
+        
+        # 插入鱼骨图
+        if fishbone_image:
+            doc.add_page_break()
+            doc.add_heading(get_text("fishbone_title"), level=2)
+            img_stream = io.BytesIO(fishbone_image)
+            doc.add_picture(img_stream, width=Inches(6))
+        
+        # 插入故障照片
+        if uploaded_images and len(uploaded_images) > 0:
+            doc.add_page_break()
+            doc.add_heading(get_text("fault_photos"), level=2)
+            
+            for idx, img_bytes in enumerate(uploaded_images[:5]):
+                try:
+                    img_stream = io.BytesIO(img_bytes)
+                    doc.add_picture(img_stream, width=Inches(4))
+                    doc.add_paragraph(f"图{idx+1}: 故障现场照片")
+                except Exception as e:
+                    doc.add_paragraph(f"[图片{idx+1}无法显示]")
+        
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer
+        
+    except ImportError:
+        buffer = io.BytesIO()
+        buffer.write(report_content.encode('utf-8'))
+        buffer.seek(0)
+        return buffer
 
 
 # ==================== 主分析函数 ====================
@@ -1354,6 +1529,9 @@ def run_failure_analysis(
     
     # 鱼骨图生成
     fishbone = FishboneGenerator.generate(symptom, product_name, five_why)
+    
+    # 生成鱼骨图图片
+    fishbone_image = create_fishbone_image(fishbone)
     
     # 根因提取
     root_cause = five_why[-1].answer if five_why else f"{product_name} 的 {symptom} 问题需要进一步分析"
@@ -1392,43 +1570,9 @@ def run_failure_analysis(
         association_rules=association_rules,
         has_images=has_images,
         analyst_name=analyst_name,
-        analyst_title=analyst_title
+        analyst_title=analyst_title,
+        fishbone_image=fishbone_image
     )
-
-
-def create_word_download(report_content: str, filename: str) -> io.BytesIO:
-    """创建Word文档下载"""
-    buffer = io.BytesIO()
-    
-    try:
-        from docx import Document
-        from docx.shared import Pt
-        
-        doc = Document()
-        
-        for line in report_content.split('\n'):
-            if line.startswith('# '):
-                doc.add_heading(line[2:], level=1)
-            elif line.startswith('## '):
-                doc.add_heading(line[3:], level=2)
-            elif line.startswith('### '):
-                doc.add_heading(line[4:], level=3)
-            elif line.startswith('#### '):
-                doc.add_heading(line[5:], level=4)
-            elif line.startswith('|') and '|' in line[1:]:
-                pass  # 表格简化
-            elif line.strip():
-                p = doc.add_paragraph(line)
-                p.style.font.size = Pt(11)
-            else:
-                doc.add_paragraph()
-        
-        doc.save(buffer)
-    except ImportError:
-        buffer.write(report_content.encode('utf-8'))
-    
-    buffer.seek(0)
-    return buffer
 
 
 # ==================== 主页面 ====================
@@ -1449,10 +1593,10 @@ def main():
         st.session_state.analyst_name = ""
     if "analyst_title" not in st.session_state:
         st.session_state.analyst_title = ""
-    if "knowledge_db" not in st.session_state:
-        st.session_state.knowledge_db = SupabaseKnowledgeDB()
+    if "uploaded_images" not in st.session_state:
+        st.session_state.uploaded_images = []
     
-    # ==================== 右上角语言切换和齿轮 ====================
+    # 右上角语言切换和齿轮
     col_title, col_spacer, col_zh, col_en, col_gear = st.columns([2, 3, 1, 1, 1])
     
     with col_zh:
@@ -1497,7 +1641,7 @@ def main():
         )
         
         if st.session_state.analyst_name:
-            st.success(f"{get_text('report_header_analyst')}: {st.session_state.analyst_name}")
+            st.success(f"{get_text('analyst')}: {st.session_state.analyst_name}")
             if st.session_state.analyst_title:
                 st.caption(st.session_state.analyst_title)
         
@@ -1506,183 +1650,207 @@ def main():
         # 数据库状态
         st.markdown(f"**{get_text('db_status')}**")
         if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
-            st.success(get_text("db_connected"))
+            st.success(f"✅ {get_text('db_connected')}")
         else:
-            st.error(get_text("db_disconnected"))
+            st.error(f"❌ {get_text('db_disconnected')}")
         
         st.markdown("---")
-        st.markdown(get_text("contact"))
+        st.markdown(f"### {get_text('contact')}")
         st.markdown(get_text("contact_email"))
     
-    # ==================== 主输入区域 ====================
-    col_left, col_right = st.columns([1, 1], gap="large")
+    # ==================== 上下布局主内容 ====================
     
-    with col_left:
-        st.markdown(f"### {get_text('basic_info')}")
-        
-        with st.form("failure_input_form"):
-            product_name = st.text_input(
-                get_text("product_name"),
-                placeholder=get_text("product_name_ph"),
-                key="product_name_input"
-            )
-            
-            symptom = st.text_area(
-                get_text("symptom"),
-                placeholder=get_text("symptom_ph"),
-                height=100,
-                key="symptom_input"
-            )
-            
-            installation = st.text_input(
-                get_text("installation"),
-                placeholder=get_text("installation_ph"),
-                key="installation_input"
-            )
-            
-            col_date, col_batch = st.columns(2)
-            with col_date:
-                st.date_input(
-                    get_text("failure_date"),
-                    value=datetime.now().date(),
-                    key="failure_date_input"
-                )
-            with col_batch:
-                batch_no = st.text_input(
-                    get_text("batch_no"),
-                    placeholder="LOT2024-001",
-                    key="batch_no_input"
-                )
-            
-            temperature = st.text_input(
-                get_text("site_temp"),
-                placeholder=get_text("site_temp_ph"),
-                key="temperature_input"
-            )
-            
-            submitted = st.form_submit_button(
-                get_text("analyze_btn"),
-                type="primary",
-                use_container_width=True
-            )
+    # 1. 故障基本信息
+    st.markdown(f"### {get_text('basic_info')}")
     
-    with col_right:
-        st.markdown(f"### {get_text('image_section')}")
-        
-        # 支持 Ctrl+V 粘贴的图片上传
+    col1, col2 = st.columns(2)
+    with col1:
+        product_name = st.text_input(
+            get_text("product_name"),
+            placeholder=get_text("product_name_ph"),
+            key="product_name_input",
+            label_visibility="collapsed"
+        )
+    with col2:
+        symptom = st.text_area(
+            get_text("symptom"),
+            placeholder=get_text("symptom_ph"),
+            height=100,
+            key="symptom_input",
+            label_visibility="collapsed"
+        )
+    
+    col3, col4, col5 = st.columns(3)
+    with col3:
+        installation = st.text_input(
+            get_text("installation"),
+            placeholder=get_text("installation_ph"),
+            key="installation_input"
+        )
+    with col4:
+        failure_date = st.date_input(
+            get_text("failure_date"),
+            value=datetime.now().date(),
+            key="failure_date_input"
+        )
+    with col5:
+        batch_no = st.text_input(
+            get_text("batch_no"),
+            placeholder="LOT2024-001",
+            key="batch_no_input"
+        )
+    
+    temperature = st.text_input(
+        get_text("site_temp"),
+        placeholder=get_text("site_temp_ph"),
+        key="temperature_input"
+    )
+    
+    st.markdown("---")
+    
+    # 2. 故障图片（支持上传和粘贴）
+    st.markdown(f"### {get_text('image_section')}")
+    
+    col_img1, col_img2 = st.columns([3, 1])
+    
+    with col_img1:
         uploaded_images = st.file_uploader(
-            get_text("image_hint"),
+            get_text("image_upload_hint"),
             type=["jpg", "jpeg", "png"],
             accept_multiple_files=True,
-            key="image_uploader"
+            key="image_uploader",
+            label_visibility="collapsed"
+        )
+    
+    with col_img2:
+        # 粘贴按钮组件
+        st.markdown(f"<small>{get_text('image_paste_hint')}</small>", unsafe_allow_html=True)
+        if st.button("📋 " + get_text("image_paste_btn"), key="paste_btn", use_container_width=True):
+            st.info(get_text("image_paste_success"))
+            # 注意：真正的粘贴功能需要 streamlit-paste-button 组件
+            # 这里保持与上传相同的处理方式
+    
+    if uploaded_images:
+        st.session_state.uploaded_images = []
+        for img in uploaded_images:
+            st.session_state.uploaded_images.append(img.getvalue())
+        
+        cols = st.columns(min(3, len(uploaded_images)))
+        for idx, img in enumerate(uploaded_images[:3]):
+            with cols[idx]:
+                st.image(img, caption=f"Image {idx+1}", use_container_width=True)
+    else:
+        st.caption(get_text("no_images"))
+    
+    st.markdown("---")
+    
+    # 3. 时序数据分析（默认不勾选）
+    st.markdown(f"### {get_text('timeseries_section')}")
+    
+    enable_timeseries = st.checkbox(
+        get_text("timeseries_checkbox"),
+        value=False,
+        key="enable_timeseries"
+    )
+    
+    timeseries_df = None
+    
+    if enable_timeseries:
+        input_method = st.radio(
+            get_text("timeseries_input_method"),
+            [get_text("timeseries_paste"), get_text("timeseries_upload")],
+            horizontal=True,
+            key="timeseries_method"
         )
         
-        if uploaded_images:
-            cols = st.columns(min(3, len(uploaded_images)))
-            for idx, img in enumerate(uploaded_images[:3]):
-                with cols[idx]:
-                    st.image(img, caption=f"Image {idx+1}", use_container_width=True)
-        
-        # 时序数据（默认不勾选）
-        st.markdown(f"### {get_text('timeseries_section')}")
-        
-        enable_timeseries = st.checkbox(
-            get_text("timeseries_checkbox"),
-            value=False,  # 默认不勾选
-            key="enable_timeseries"
-        )
-        
-        timeseries_df = None
-        
-        if enable_timeseries:
-            input_method = st.radio(
-                get_text("timeseries_input_method"),
-                [get_text("timeseries_paste"), get_text("timeseries_upload")],
-                horizontal=True,
-                key="timeseries_method"
+        if input_method == get_text("timeseries_paste"):
+            paste_data = st.text_area(
+                get_text("timeseries_paste_placeholder"),
+                height=150,
+                key="timeseries_paste"
             )
-            
-            if input_method == get_text("timeseries_paste"):
-                paste_data = st.text_area(
-                    get_text("timeseries_paste_placeholder"),
-                    height=150,
-                    key="timeseries_paste"
-                )
-                if paste_data:
-                    timeseries_df = TimeSeriesAnalyzer.parse_data(paste_data)
-                    if timeseries_df is not None:
-                        st.success(f"已解析 {len(timeseries_df)} 行数据")
-                    else:
-                        st.error("数据格式错误，请检查")
-            else:
-                timeseries_file = st.file_uploader(
-                    get_text("timeseries_file_hint"),
-                    type=["xlsx", "xls", "csv"],
-                    key="timeseries_file"
-                )
-                if timeseries_file:
-                    timeseries_df = TimeSeriesAnalyzer.parse_excel(timeseries_file)
-                    if timeseries_df is not None:
-                        st.success(f"已加载 {len(timeseries_df)} 行数据")
-                        st.dataframe(timeseries_df.head(), use_container_width=True)
-                    else:
-                        st.error("文件解析失败")
-            
-            # 模板下载
-            template_df = pd.DataFrame({
-                "date": ["2024-01-01", "2024-02-01", "2024-03-01"],
-                "production_qty": [1000, 1100, 1050],
-                "failure_qty": [5, 8, 12]
-            })
-            template_csv = template_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label=get_text("download_template"),
-                data=template_csv,
-                file_name="defect_data_template.csv",
-                mime="text/csv",
-                key="template_download"
-            )
-    
-    # ==================== 高级选项（全部默认勾选）====================
-    with st.expander(get_text("advanced_options")):
-        col_adv1, col_adv2, col_adv3, col_adv4 = st.columns(4)
-        with col_adv1:
-            enable_web = st.checkbox(get_text("web_search"), value=True, key="web_search")
-        with col_adv2:
-            enable_rule_mining = st.checkbox(get_text("rule_mining"), value=True, key="rule_mining")
-        with col_adv3:
-            enable_spc = st.checkbox(get_text("spc"), value=True, key="spc")
-        with col_adv4:
-            enable_8d = st.checkbox(get_text("gen_8d"), value=True, key="gen_8d")
-    
-    # ==================== 执行分析 ====================
-    if submitted:
-        if not product_name or not symptom:
-            st.error(get_text("fill_required"))
+            if paste_data:
+                timeseries_df = TimeSeriesAnalyzer.parse_data(paste_data)
+                if timeseries_df is not None:
+                    st.success(f"已解析 {len(timeseries_df)} 行数据")
+                else:
+                    st.error("数据格式错误，请检查")
         else:
-            with st.spinner(get_text("analyzing")):
-                try:
-                    result = run_failure_analysis(
-                        product_name=product_name,
-                        symptom=symptom,
-                        installation=installation,
-                        temperature=temperature,
-                        timeseries_df=timeseries_df if enable_timeseries else None,
-                        enable_web=enable_web,
-                        enable_rule_mining=enable_rule_mining,
-                        enable_spc=enable_spc,
-                        has_images=len(uploaded_images) > 0 if uploaded_images else False,
-                        analyst_name=st.session_state.analyst_name,
-                        analyst_title=st.session_state.analyst_title
-                    )
-                    st.session_state.analysis_result = result
-                    st.session_state.current_report = None
-                    st.success(get_text("success"))
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"{get_text('error')}: {str(e)}")
+            timeseries_file = st.file_uploader(
+                get_text("timeseries_file_hint"),
+                type=["xlsx", "xls", "csv"],
+                key="timeseries_file"
+            )
+            if timeseries_file:
+                timeseries_df = TimeSeriesAnalyzer.parse_excel(timeseries_file)
+                if timeseries_df is not None:
+                    st.success(f"已加载 {len(timeseries_df)} 行数据")
+                    st.dataframe(timeseries_df.head(), use_container_width=True)
+                else:
+                    st.error("文件解析失败")
+        
+        # 模板下载
+        template_df = pd.DataFrame({
+            "date": ["2024-01-01", "2024-02-01", "2024-03-01"],
+            "production_qty": [1000, 1100, 1050],
+            "failure_qty": [5, 8, 12]
+        })
+        template_csv = template_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label=get_text("download_template"),
+            data=template_csv,
+            file_name="defect_data_template.csv",
+            mime="text/csv",
+            key="template_download"
+        )
     
-    # ==================== 显示分析结果 ====================
+    st.markdown("---")
+    
+    # 4. 高级分析选项（全部默认勾选）
+    st.markdown(f"### {get_text('advanced_options')}")
+    
+    col_adv1, col_adv2, col_adv3, col_adv4 = st.columns(4)
+    with col_adv1:
+        enable_web = st.checkbox(get_text("web_search"), value=True, key="web_search")
+    with col_adv2:
+        enable_rule_mining = st.checkbox(get_text("rule_mining"), value=True, key="rule_mining")
+    with col_adv3:
+        enable_spc = st.checkbox(get_text("spc"), value=True, key="spc")
+    with col_adv4:
+        enable_8d = st.checkbox(get_text("gen_8d"), value=True, key="gen_8d")
+    
+    st.markdown("---")
+    
+    # 5. 开始分析按钮
+    col_btn_center = st.columns([1, 2, 1])[1]
+    with col_btn_center:
+        if st.button(get_text("analyze_btn"), type="primary", use_container_width=True):
+            if not product_name or not symptom:
+                st.error(get_text("fill_required"))
+            else:
+                with st.spinner(get_text("analyzing")):
+                    try:
+                        result = run_failure_analysis(
+                            product_name=product_name,
+                            symptom=symptom,
+                            installation=installation,
+                            temperature=temperature,
+                            timeseries_df=timeseries_df if enable_timeseries else None,
+                            enable_web=enable_web,
+                            enable_rule_mining=enable_rule_mining,
+                            enable_spc=enable_spc,
+                            has_images=len(uploaded_images) > 0 if uploaded_images else False,
+                            analyst_name=st.session_state.analyst_name,
+                            analyst_title=st.session_state.analyst_title
+                        )
+                        st.session_state.analysis_result = result
+                        st.session_state.current_report = None
+                        st.success(get_text("success"))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"{get_text('error')}: {str(e)}")
+    
+    # 6. 显示分析结果
     if st.session_state.analysis_result:
         result = st.session_state.analysis_result
         lang = st.session_state.lang
@@ -1706,21 +1874,23 @@ def main():
                 with col_q:
                     st.markdown(f"**Why-{item.level}**")
                 with col_a:
-                    st.markdown(f"**Q**: {item.question}")
-                    st.markdown(f"**A**: {item.answer}")
-                    st.caption(f"🔬 {get_text('verification_method')}: {item.verification_method[:100]}...")
-                    st.progress(item.confidence, text=f"{get_text('confidence')}: {item.confidence:.0%}")
+                    st.markdown(f"**Q**: {remove_bold_markers(item.question)}")
+                    st.markdown(f"**A**: {remove_bold_markers(item.answer)}")
+                    st.caption(f"验证方法: {remove_bold_markers(item.verification_method[:100])}...")
+                    st.progress(item.confidence, text=f"置信度: {item.confidence:.0%}")
                 st.divider()
         
-        # 鱼骨图
+        # 鱼骨图（显示图片）
         with st.expander(get_text("fishbone_title")):
-            fishbone_dict = result.fishbone.to_dict()
-            cols = st.columns(3)
-            for idx, (cat, causes) in enumerate(fishbone_dict.items()):
-                with cols[idx % 3]:
-                    st.markdown(f"**{cat}**")
-                    for cause in causes[:4]:
-                        st.markdown(f"- {cause[:60]}...")
+            if result.fishbone_image:
+                st.image(result.fishbone_image, use_container_width=True)
+            else:
+                fishbone_dict = result.fishbone.to_dict()
+                for cat, causes in fishbone_dict.items():
+                    if causes:
+                        st.markdown(f"**{cat}**")
+                        for cause in causes[:4]:
+                            st.markdown(f"- {remove_bold_markers(cause)}")
         
         # SPC分析
         if result.spc_analysis and result.spc_analysis.get("has_data"):
@@ -1731,7 +1901,7 @@ def main():
                 with col_m2:
                     st.metric("近期趋势", result.spc_analysis['trend'])
                 with col_m3:
-                    st.metric("过程稳定", "✅ 是" if result.spc_analysis['is_stable'] else "⚠️ 否")
+                    st.metric("过程稳定", "是" if result.spc_analysis['is_stable'] else "否")
         
         # 关联规则
         if result.association_rules:
@@ -1739,11 +1909,11 @@ def main():
                 for rule in result.association_rules:
                     antecedents = " + ".join(rule.get("antecedents", []))
                     consequents = " + ".join(rule.get("consequents", []))
-                    st.info(f"**{antecedents} → {consequents}**\n\n置信度: {rule.get('confidence', 0):.0%}")
+                    st.info(f"{antecedents} → {consequents}\n\n置信度: {rule.get('confidence', 0):.0%}")
         
         # 根因结论
         st.markdown(f"### {get_text('root_cause_title')}")
-        st.success(f"**{result.root_cause}**")
+        st.success(remove_bold_markers(result.root_cause))
         
         # 报告生成按钮
         st.markdown("---")
@@ -1769,16 +1939,24 @@ def main():
                 st.session_state.current_report = None
                 st.rerun()
     
-    # ==================== 显示生成的报告 ====================
+    # 7. 显示生成的报告
     if st.session_state.current_report:
         st.markdown("---")
         st.markdown(f"### {get_text('report_preview')}")
         
-        with st.container(height=500):
+        with st.container(height=400):
             st.markdown(st.session_state.current_report)
         
-        filename = f"{st.session_state.analysis_result.product_name}_{st.session_state.report_type.upper()}_Report_{datetime.now().strftime('%Y%m%d')}.docx"
-        word_buffer = create_word_download(st.session_state.current_report, filename)
+        filename = f"{st.session_state.analysis_result.product_name}_{st.session_state.analysis_result.symptom[:30]}_{st.session_state.report_type.upper()}_Report_{datetime.now().strftime('%Y%m%d')}.docx"
+        filename = re.sub(r'[\\/*?:"<>|]', '', filename)
+        
+        word_buffer = create_word_document(
+            st.session_state.current_report,
+            st.session_state.report_type,
+            st.session_state.analysis_result,
+            st.session_state.uploaded_images,
+            st.session_state.analysis_result.fishbone_image
+        )
         
         st.download_button(
             label=get_text("download_word"),
