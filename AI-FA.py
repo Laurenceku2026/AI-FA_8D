@@ -2,24 +2,8 @@
 AI-FA 智能故障分析系统
 AI-powered Failure Analysis & 8D Report Generation
 
-版本: 2.0.0
-功能:
-- 双语双向检索（中文/英文并行搜索）
-- Supabase 知识库管理（六分类）
-- 时序数据分析 + SPC图表
-- 关联规则挖掘
-- 联网搜索
-- 5-Why推理 + 鱼骨图
-- FA报告 + 8D报告
-- Word导出（图文并茂）
-
-修复内容:
-- 中英文输出完全分离
-- 用户输入自动翻译
-- 报告信息表格完整显示
-- 5-Why 表格+列表双格式
-- D2 5W2H 格式
-- 鱼骨图放大到12英寸
+版本: 2.0.1
+修复: 修复 result 为 None 时的边界错误
 """
 
 import streamlit as st
@@ -504,6 +488,12 @@ def truncate_summary(text: str, max_len: int = 10) -> str:
     text = remove_bold_markers(text)
     if len(text) <= max_len:
         return text
+    # 尝试在标点处截断
+    for punct in ['。', '，', '、', '；', '：', '？', '！', '.', ',', ';', ':', '?', '!']:
+        if punct in text[:max_len+5]:
+            pos = text[:max_len+5].rfind(punct)
+            if pos > 0:
+                return text[:pos]
     return text[:max_len] + "…"
 
 
@@ -726,54 +716,6 @@ class SupabaseKnowledgeDB:
         return total
 
 
-# ==================== 默认知识库数据 ====================
-
-DEFAULT_KNOWLEDGE = {
-    "光学": [
-        "LED光衰过快通常与结温过高有关，建议优化散热设计",
-        "色偏问题可能由不同批次LED芯片的色温差异导致",
-        "透镜发黄/老化是由于长时间高温导致的材料降解",
-        "光斑不均匀可能是光学设计或LED排列问题",
-        "防水结构失效导致水汽进入光学腔体，引起透光率下降"
-    ],
-    "机械": [
-        "外壳开裂通常与材料选型、应力集中或安装过紧有关",
-        "密封圈老化失效是进水故障的常见原因，建议定期更换",
-        "螺丝松动可能导致电气接触不良或防水失效",
-        "振动环境下的连接器需要增加锁紧机构或点胶固定",
-        "热膨胀系数不匹配导致不同材料间产生间隙"
-    ],
-    "材料": [
-        "PCBA碳化是短路后的典型现象，会导致电阻下降形成正反馈",
-        "灌封胶与外壳的附着力不足是水汽侵入的薄弱环节",
-        "PVC线材在高温环境下会加速老化变脆",
-        "PMMA透镜的耐温等级通常为80°C，超过会变形",
-        "PA66材料具有较好的阻燃性（V0等级）"
-    ],
-    "热学": [
-        "结温每升高10°C，LED寿命约减少50%",
-        "黑色表面在阳光直射下温度可达70-80°C",
-        "散热不良是导致电子元器件加速老化的主要原因",
-        "热胀冷缩效应会破坏密封结构，建议使用柔性密封材料",
-        "建议在高温环境应用中使用主动散热或增大散热面积"
-    ],
-    "电气": [
-        "浪涌保护不足是电源损坏的常见原因",
-        "短路发生后持续供电会导致PCB碳化起火",
-        "建议在电源输出端加装保险丝或断路器",
-        "湿气侵入会导致绝缘电阻下降，引发漏电或短路",
-        "长时间过载运行会加速电解电容老化"
-    ],
-    "控制": [
-        "单片机的死机可能是电源纹波过大或EMI干扰导致",
-        "通信异常常由接线松动、线缆过长或终端电阻配置错误引起",
-        "固件bug可能导致异常状态无法恢复",
-        "建议增加看门狗定时器防止系统死锁",
-        "DMX信号链中的终端电阻匹配很重要"
-    ]
-}
-
-
 # ==================== 管理员弹窗 ====================
 
 @st.dialog("管理员设置", width="large")
@@ -941,10 +883,12 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
     for cat_key, causes, spine_x, spine_y in categories:
         display_name = cat_names_zh.get(cat_key, cat_key) if lang == "zh" else cat_key
         
+        # 脊骨
         ax.plot([2.5, spine_x], [6, spine_y], 'k-', linewidth=1.5)
         ax.text(spine_x - 0.5, spine_y, display_name, fontsize=11,
                 ha='right', va='center', fontweight='bold')
         
+        # 原因分支
         for j, cause in enumerate(causes[:4]):
             cause_text = cause[:25] + "…" if len(cause) > 25 else cause
             y_offset = spine_y + 0.6 + j * 0.45 if j % 2 == 0 else spine_y - 0.6 - (j-1) * 0.45
@@ -1500,6 +1444,7 @@ def create_word_document(report_content: str, result: FailureAnalysisResult,
             elif line.startswith('### '):
                 doc.add_heading(line[4:], level=3)
             elif line.startswith('|') and '|' in line[1:]:
+                # 处理表格
                 table_lines = []
                 while i < len(lines) and lines[i].strip().startswith('|'):
                     table_lines.append(lines[i].strip())
@@ -1874,8 +1819,8 @@ def main():
                 st.session_state.current_report = None
                 st.rerun()
     
-    # 显示报告
-    if st.session_state.current_report:
+    # 显示报告 - 修复边界错误
+    if st.session_state.current_report and st.session_state.result:
         st.markdown("---")
         st.markdown(f"### {get_text('report_preview')}")
         with st.container(height=500):
