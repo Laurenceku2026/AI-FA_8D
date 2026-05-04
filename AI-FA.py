@@ -979,6 +979,7 @@ def generate_five_why(symptom: str, product_name: str, lang: str,
         if temperature:
             context += f"Temperature: {temperature}\n"
         
+        # 修复点：使用 templates[level] 而不是 template
         prompt = f"""You are a failure analysis engineer.
 
 Product: {product_name}
@@ -986,7 +987,7 @@ Symptom: {symptom}
 
 {context}
 Level {level}: {current_question}
-{template}
+{templates[level]}
 
 Output JSON: {{"answer": "your answer", "confidence": 0.8}}"""
         
