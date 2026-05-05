@@ -368,7 +368,7 @@ TEXTS = {
         
         "basic_info": "故障基本信息",
         "product_name": "产品名称",
-        "product_name_ph": "例如：Allegro Dot L RGBW",
+        "product_name_ph": "例如：Apollo Dot L RGBW",
         "symptom": "故障现象",
         "symptom_ph": "例如：暴雨后灯具闪烁、不亮、有烧焦痕迹...",
         "installation": "安装位置/方向",
@@ -548,7 +548,7 @@ TEXTS = {
         
         "basic_info": "Basic Failure Information",
         "product_name": "Product Name",
-        "product_name_ph": "e.g., Allegro Dot L RGBW",
+        "product_name_ph": "e.g., Apollo Dot L RGBW",
         "symptom": "Failure Symptom",
         "symptom_ph": "e.g., flickering, no light output, burning marks after heavy rain...",
         "installation": "Installation Position/Orientation",
