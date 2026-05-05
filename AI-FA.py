@@ -297,6 +297,40 @@ TEXTS = {
         "export_kb": "导出知识库",
         "import_kb": "导入知识库（Excel）",
         "import_success": "导入成功！共导入 {count} 条记录",
+
+            # 在 TEXTS["zh"] 中添加以下内容（放在 "analyst_title_ph" 之后，最后一个花括号之前）
+    "team_role": "角色",
+    "team_responsibility": "职责",
+    "team_leader": "团队负责人",
+    "team_leader_resp": "总体协调",
+    "design_engineer": "设计工程师",
+    "design_engineer_resp": "技术分析",
+    "quality_engineer": "质量工程师",
+    "quality_engineer_resp": "质量验证",
+    "discovery_location": "发现位置",
+    "discovery_person": "发现人",
+    "preliminary_judgment": "初步判断",
+    "occurrence_process": "发生过程",
+    "affected_quantity": "影响数量",
+    "installation_site": "安装现场",
+    "field_maintenance_team": "现场维护团队",
+    "under_investigation": "调查中",
+    "failure_during_operation": "运行过程中发生故障",
+    "fishbone_analysis_title": "鱼骨图分析",
+    "five_why_analysis_title": "5-Why 分析",
+    "verified_root_cause_title": "验证后的根本原因",
+    "verification_item": "项目",
+    "verification_method": "方法",
+    "verification_criteria": "标准",
+    "function_test": "功能",
+    "function_test_method": "实际测试",
+    "function_test_criteria": "正常运行",
+    "durability_test": "耐久性",
+    "durability_test_method": "加速老化",
+    "durability_test_criteria": "满足设计寿命",
+    "d8_recognition_1": "根本原因已确认",
+    "d8_recognition_2": "改进措施已定义",
+    "d8_recognition_3": "经验教训已加入知识库",
         
         "establish_team": "建立团队",
         "problem_description": "问题描述",
@@ -1435,21 +1469,114 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
     
     # 根据语言选择内容
     if lang == "zh":
-        symptom_text = result.symptom
-        installation_text = result.installation
+        symptom_text = remove_bold_markers(result.symptom)
+        installation_text = remove_bold_markers(result.installation)
         root_cause = remove_bold_markers(result.root_cause_zh)
         interim_actions = [remove_bold_markers(a) for a in result.interim_actions_zh]
         permanent_actions = [remove_bold_markers(a) for a in result.permanent_actions_zh]
         preventive_actions = [remove_bold_markers(a) for a in result.preventive_actions_zh]
+        
+        # 5-Why 中文内容
+        five_why_items = []
+        for item in result.five_why:
+            five_why_items.append({
+                "level": item.level,
+                "question": remove_bold_markers(item.question_zh),
+                "answer": remove_bold_markers(item.answer_zh)
+            })
+        
+        # 鱼骨图中文内容
+        fishbone_dict = result.fishbone.to_dict("zh")
+        cat_names = {"Man": "人", "Machine": "机", "Material": "料",
+                     "Method": "法", "Environment": "环", "Measurement": "测"}
+        
+        # D1 表格中文内容
+        d1_table_data = {
+            "headers": [get_text("team_role"), get_text("team_responsibility")],
+            "rows": [
+                [get_text("team_leader"), get_text("team_leader_resp")],
+                [get_text("design_engineer"), get_text("design_engineer_resp")],
+                [get_text("quality_engineer"), get_text("quality_engineer_resp")]
+            ]
+        }
+        
+        # D6 表格中文内容
+        d6_table_data = {
+            "headers": [get_text("verification_item"), get_text("verification_method"), get_text("verification_criteria")],
+            "rows": [
+                [get_text("function_test"), get_text("function_test_method"), get_text("function_test_criteria")],
+                [get_text("durability_test"), get_text("durability_test_method"), get_text("durability_test_criteria")]
+            ]
+        }
+        
+        # D8 中文内容
+        d8_items = [
+            get_text("d8_recognition_1"),
+            get_text("d8_recognition_2"),
+            get_text("d8_recognition_3")
+        ]
+        
+        # D2 表格中的翻译值
+        d2_location_value = get_text("installation_site")
+        d2_who_value = get_text("field_maintenance_team")
+        d2_why_value = get_text("under_investigation")
+        d2_how_value = get_text("failure_during_operation")
+        d2_how_many_value = f"Stage {result.failure_stage} - {stage_name}" if lang == "en" else stage_name
+        
     else:
-        symptom_text = result.symptom_en
-        installation_text = result.installation_en
+        # 英文界面 - 保持原样
+        symptom_text = remove_bold_markers(result.symptom_en)
+        installation_text = remove_bold_markers(result.installation_en)
         root_cause = remove_bold_markers(result.root_cause_en)
         interim_actions = [remove_bold_markers(a) for a in result.interim_actions_en]
         permanent_actions = [remove_bold_markers(a) for a in result.permanent_actions_en]
         preventive_actions = [remove_bold_markers(a) for a in result.preventive_actions_en]
+        
+        five_why_items = []
+        for item in result.five_why:
+            five_why_items.append({
+                "level": item.level,
+                "question": remove_bold_markers(item.question_en),
+                "answer": remove_bold_markers(item.answer_en)
+            })
+        
+        fishbone_dict = result.fishbone.to_dict("en")
+        cat_names = {"Man": "Man", "Machine": "Machine", "Material": "Material",
+                     "Method": "Method", "Environment": "Environment", "Measurement": "Measurement"}
+        
+        d1_table_data = {
+            "headers": [get_text("team_role"), get_text("team_responsibility")],
+            "rows": [
+                [get_text("team_leader"), get_text("team_leader_resp")],
+                [get_text("design_engineer"), get_text("design_engineer_resp")],
+                [get_text("quality_engineer"), get_text("quality_engineer_resp")]
+            ]
+        }
+        
+        d6_table_data = {
+            "headers": [get_text("verification_item"), get_text("verification_method"), get_text("verification_criteria")],
+            "rows": [
+                [get_text("function_test"), get_text("function_test_method"), get_text("function_test_criteria")],
+                [get_text("durability_test"), get_text("durability_test_method"), get_text("durability_test_criteria")]
+            ]
+        }
+        
+        d8_items = [
+            "Root cause identified and confirmed",
+            "Improvement actions defined",
+            "Lessons learned added to knowledge base"
+        ]
+        
+        d2_location_value = "Installation site"
+        d2_who_value = "Field maintenance team"
+        d2_why_value = "Under investigation"
+        d2_how_value = "Failure occurred during operation"
+        d2_how_many_value = f"Stage {result.failure_stage} - {stage_name}"
     
     fault_summary = symptom_text[:30] + "..." if len(symptom_text) > 30 else symptom_text
+    
+    # 清理症状文本中的换行
+    symptom_clean = symptom_text.replace('\n', ' ')
     
     # 信息表格
     info_table = f"""
@@ -1463,35 +1590,32 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D1
+    # D1 表格
+    d1_table = "| " + " | ".join(d1_table_data["headers"]) + " |\n|" + "|".join(["------" for _ in d1_table_data["headers"]]) + "|\n"
+    for row in d1_table_data["rows"]:
+        d1_table += "| " + " | ".join(row) + " |\n"
+    
     d1 = f"""
 ## D1: {get_text('establish_team')}
 
-| Role | Responsibility |
-|------|----------------|
-| Team Leader | Overall coordination |
-| Design Engineer | Technical analysis |
-| Quality Engineer | Quality verification |
-
+{d1_table}
 """
     
-    # D2 5W2H
-    # 清理症状文本中的换行和星号
-    symptom_clean = remove_bold_markers(symptom_text).replace('\n', ' ')
+    # D2 问题描述
     d2 = f"""
 ## D2: {get_text('problem_description')}
 
-| {get_text('what')} | {symptom_clean[:200]} |
-| {get_text('where')} | {installation_text if installation_text else 'Installation site'} |
+| {get_text('what')} | {symptom_clean[:400]} |
+| {get_text('where')} | {installation_text if installation_text else d2_location_value} |
 | {get_text('when')} | {datetime.now().strftime('%Y-%m-%d')} |
-| {get_text('who')} | Field maintenance team |
-| {get_text('why')} | Under investigation |
-| {get_text('how')} | Failure occurred during operation |
-| {get_text('how_many')} | Stage {result.failure_stage} - {stage_name} |
+| {get_text('who')} | {d2_who_value} |
+| {get_text('why')} | {d2_why_value} |
+| {get_text('how')} | {d2_how_value} |
+| {get_text('how_many')} | {d2_how_many_value} |
 
 """
     
-    # D3
+    # D3 临时措施
     d3 = f"""
 ## D3: {get_text('interim_actions')}
 
@@ -1499,42 +1623,33 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D4 5-Why 和鱼骨图
-    five_why_list = ""
-    for item in result.five_why:
-        if lang == "zh":
-            question = remove_bold_markers(item.question_zh)
-            answer = remove_bold_markers(item.answer_zh)
-        else:
-            question = remove_bold_markers(item.question_en)
-            answer = remove_bold_markers(item.answer_en)
-        five_why_list += f"\n**Why-{item.level}**: {question}\n→ {answer}\n"
-    
-    fishbone_dict = result.fishbone.to_dict(lang)
+    # D4 鱼骨图文字
     fishbone_text = ""
-    cat_names_zh = {"Man": "人", "Machine": "机", "Material": "料",
-                    "Method": "法", "Environment": "环", "Measurement": "测"}
-    
     for cat, causes in fishbone_dict.items():
         if causes:
-            display_cat = cat_names_zh.get(cat, cat) if lang == "zh" else cat
+            display_cat = cat_names.get(cat, cat)
             fishbone_text += f"\n**{display_cat}**: {', '.join([remove_bold_markers(c) for c in causes[:3]])}\n"
+    
+    # D4 5-Why 列表
+    five_why_list = ""
+    for item in five_why_items:
+        five_why_list += f"\n**Why-{item['level']}**: {item['question']}\n→ {item['answer']}\n"
     
     d4 = f"""
 ## D4: {get_text('root_cause_analysis')}
 
-### Fishbone Analysis
+### {get_text('fishbone_analysis_title')}
 {fishbone_text}
 
-### 5-Why Analysis
+### {get_text('five_why_analysis_title')}
 {five_why_list}
 
-### Verified Root Cause
+### {get_text('verified_root_cause_title')}
 {root_cause}
 
 """
     
-    # D5
+    # D5 永久措施
     d5 = f"""
 ## D5: {get_text('permanent_actions')}
 
@@ -1542,18 +1657,18 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D6
+    # D6 效果验证表格
+    d6_table = "| " + " | ".join(d6_table_data["headers"]) + " |\n|" + "|".join(["------" for _ in d6_table_data["headers"]]) + "|\n"
+    for row in d6_table_data["rows"]:
+        d6_table += "| " + " | ".join(row) + " |\n"
+    
     d6 = f"""
 ## D6: {get_text('effectiveness_verification')}
 
-| Item | Method | Criteria |
-|------|--------|----------|
-| Function | Actual test | Normal operation |
-| Durability | Accelerated aging | Meet design life |
-
+{d6_table}
 """
     
-    # D7
+    # D7 预防措施
     d7 = f"""
 ## D7: {get_text('preventive_actions')}
 
@@ -1561,13 +1676,12 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D8
+    # D8 总结表彰
+    d8_items_formatted = chr(10).join(f'- {item}' for item in d8_items)
     d8 = f"""
 ## D8: {get_text('team_recognition')}
 
-- Root cause identified and confirmed
-- Improvement actions defined
-- Lessons learned added to knowledge base
+{d8_items_formatted}
 
 """
     
