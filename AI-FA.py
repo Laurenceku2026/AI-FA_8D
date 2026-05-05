@@ -426,7 +426,20 @@ TEXTS = {
         "stage_1": "轻微异常",
         "stage_2": "中度异常",
         "stage_3": "严重故障",
-        
+                # 失效等级表格（中文）
+        "stage_table_title": "等级定义参考",
+        "stage_table_header_level": "等级",
+        "stage_table_header_name": "名称",
+        "stage_table_header_characteristics": "典型特征",
+        "stage_table_header_action": "建议行动",
+        "stage_0_char": "功能正常，无异常",
+        "stage_0_action": "无需处理",
+        "stage_1_char": "闪烁、弱光、色偏",
+        "stage_1_action": "监控观察",
+        "stage_2_char": "烧焦痕迹、变形",
+        "stage_2_action": "立即更换",
+        "stage_3_char": "短路、冒烟、起火",
+        "stage_3_action": "紧急停机",
         "report_preview": "报告预览",
         "fault_photos": "故障照片",
         "analyst": "分析人",
@@ -593,7 +606,20 @@ TEXTS = {
         "stage_1": "Minor Anomaly",
         "stage_2": "Moderate Anomaly",
         "stage_3": "Critical Failure",
-        
+                # 失效等级表格（英文）
+        "stage_table_title": "Stage Definition Reference",
+        "stage_table_header_level": "Level",
+        "stage_table_header_name": "Name",
+        "stage_table_header_characteristics": "Typical Characteristics",
+        "stage_table_header_action": "Recommended Action",
+        "stage_0_char": "Normal function, no abnormality",
+        "stage_0_action": "No action needed",
+        "stage_1_char": "Flickering, dim light, color shift",
+        "stage_1_action": "Monitor",
+        "stage_2_char": "Burning marks, deformation",
+        "stage_2_action": "Replace immediately",
+        "stage_3_char": "Short circuit, smoke, fire",
+        "stage_3_action": "Emergency shutdown",
         "report_preview": "Report Preview",
         "fault_photos": "Fault Photos",
         "analyst": "Analyst",
@@ -1530,10 +1556,20 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
+        # 失效等级章节（包含等级定义表格）
     stage_section = f"""
 ## {get_text('stage_label')}
 
 {stage_emoji} {stage_name} ({get_text('confidence')}: {result.root_cause_confidence:.0%})
+
+### {get_text('stage_table_title')}
+
+| {get_text('stage_table_header_level')} | {get_text('stage_table_header_name')} | {get_text('stage_table_header_characteristics')} | {get_text('stage_table_header_action')} |
+|------|------|----------|----------|
+| Stage 0 | {get_text('stage_0')} | {get_text('stage_0_char')} | {get_text('stage_0_action')} |
+| Stage 1 | {get_text('stage_1')} | {get_text('stage_1_char')} | {get_text('stage_1_action')} |
+| Stage 2 | {get_text('stage_2')} | {get_text('stage_2_char')} | {get_text('stage_2_action')} |
+| Stage 3 | {get_text('stage_3')} | {get_text('stage_3_char')} | {get_text('stage_3_action')} |
 
 """
     
