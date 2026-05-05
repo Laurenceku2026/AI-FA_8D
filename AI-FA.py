@@ -2,12 +2,12 @@
 AI-FA 智能故障分析系统
 AI-powered Failure Analysis & 8D Report Generation
 
-版本: 3.0.0
-更新: 双语输出架构重构
-- 一次LLM调用输出中英文双语结果
-- 双向检索（中文+英文）
-- 报告100%与界面语言一致
-- 专业术语保留规则
+版本: 3.0.1
+更新: 修复
+- 表格表头使用 get_text() 实现双语
+- 关联规则支持双语输出
+- 报告中的 ** 星号标记已清理
+- 鱼骨图中文内容强制100%中文
 """
 
 import streamlit as st
@@ -305,6 +305,8 @@ TEXTS = {
         "team_recognition": "总结表彰",
         "table_format": "表格形式",
         "detailed_description": "详细说明",
+        "question_label": "问题",
+        "answer_label": "答案",
     },
     "en": {
         "app_title": "AI-FA Intelligent Failure Analysis System",
@@ -434,6 +436,8 @@ TEXTS = {
         "team_recognition": "Team Recognition",
         "table_format": "Table Format",
         "detailed_description": "Detailed Description",
+        "question_label": "Question",
+        "answer_label": "Answer",
     }
 }
 
@@ -453,13 +457,36 @@ def is_chinese(text: str) -> bool:
 
 def preserve_technical_terms(text: str, target_lang: str) -> str:
     """确保专业术语在翻译后仍然保留原样"""
-    # 这是一个后处理函数，用于确保LLM输出符合专业术语保留规则
-    # 实际使用中，LLM的Prompt已经要求保留，此函数作为兜底
     for term in TECHNICAL_TERMS:
-        # 注意：这里需要处理大小写变体
         pattern = re.compile(re.escape(term), re.IGNORECASE)
         text = pattern.sub(term, text)
     return text
+
+
+def remove_bold_markers(text: str) -> str:
+    """删除文本中的**粗体标记，同时清理Markdown语法"""
+    if not text:
+        return text
+    # 去除 **text** 格式
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    # 去除 *text* 格式（斜体）
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    return text
+
+
+def truncate_summary(text: str, max_len: int = 10) -> str:
+    """截取摘要（用于标题）"""
+    if not text:
+        return "故障分析"
+    text = remove_bold_markers(text)
+    if len(text) <= max_len:
+        return text
+    for punct in ['。', '，', '、', '；', '：', '？', '！', '.', ',', ';', ':', '?', '!']:
+        if punct in text[:max_len+5]:
+            pos = text[:max_len+5].rfind(punct)
+            if pos > 0:
+                return text[:pos]
+    return text[:max_len] + "…"
 
 
 def get_llm_client():
@@ -554,12 +581,10 @@ def safe_json_parse(response: str, default_value: dict = None) -> dict:
         default_value = {}
     
     try:
-        # 尝试提取JSON
         start = response.find('{')
         end = response.rfind('}') + 1
         if start != -1 and end > start:
             return json.loads(response[start:end])
-        # 尝试提取数组格式
         start = response.find('[')
         end = response.rfind(']') + 1
         if start != -1 and end > start:
@@ -568,28 +593,6 @@ def safe_json_parse(response: str, default_value: dict = None) -> dict:
         pass
     
     return default_value
-
-
-def remove_bold_markers(text: str) -> str:
-    """删除文本中的**粗体标记"""
-    if not text:
-        return text
-    return re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-
-
-def truncate_summary(text: str, max_len: int = 10) -> str:
-    """截取摘要（用于标题）"""
-    if not text:
-        return "故障分析"
-    text = remove_bold_markers(text)
-    if len(text) <= max_len:
-        return text
-    for punct in ['。', '，', '、', '；', '：', '？', '！', '.', ',', ';', ':', '?', '!']:
-        if punct in text[:max_len+5]:
-            pos = text[:max_len+5].rfind(punct)
-            if pos > 0:
-                return text[:pos]
-    return text[:max_len] + "…"
 
 
 # ==================== 联网搜索（双语双向，中文优先）====================
@@ -874,7 +877,7 @@ def admin_settings_dialog():
             for idx, item in enumerate(items):
                 col1, col2 = st.columns([10, 1])
                 with col1:
-                    display_item = item[:150] + "..." if len(item) > 150 else item
+                    display_item = remove_bold_markers(item[:150] + "..." if len(item) > 150 else item)
                     st.write(f"{idx+1}. {display_item}")
                 with col2:
                     if st.button("❌", key=f"del_{selected_cat}_{idx}"):
@@ -988,12 +991,12 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
         
         # 原因分支
         for j, cause in enumerate(causes[:4]):
-            cause_text = cause[:25] + "…" if len(cause) > 25 else cause
+            cause_text = remove_bold_markers(cause[:25] + "…" if len(cause) > 25 else cause)
             y_offset = spine_y + 0.6 + j * 0.45 if j % 2 == 0 else spine_y - 0.6 - (j-1) * 0.45
             ax.plot([spine_x, spine_x + 0.8], [spine_y, y_offset], 'k:', linewidth=0.8, alpha=0.6)
             ax.text(spine_x + 0.9, y_offset, cause_text, fontsize=8, va='center')
     
-    ax.text(8, 11.2, get_text("fishbone_title"), fontsize=16, ha='center', fontweight='bold')
+    ax.text(8, 11.2, remove_bold_markers(get_text("fishbone_title")), fontsize=16, ha='center', fontweight='bold')
     
     plt.tight_layout()
     
@@ -1091,10 +1094,11 @@ def call_bilingual_analysis(product_name: str, symptom_en: str, installation_en:
 Generate a bilingual analysis (English and Chinese). **Critical Rules:**
 1. Technical terms ({terms_str}) MUST remain in their original form in BOTH languages
 2. All outputs must be in valid JSON format
-3. Chinese content must be natural, professional, and semantically identical to English
-4. For 5-Why: 5 levels, each with question (the "why" inquiry) and answer
-5. For Fishbone: 5-8 causes per category
-6. For actions: 2-4 interim, 3-5 permanent, 2-3 preventive
+3. Chinese content must be 100% Chinese characters (except technical terms listed above) - NO English sentences in Chinese fields
+4. English content must be 100% English
+5. For 5-Why: 5 levels, each with question (the "why" inquiry) and answer
+6. For Fishbone: 3-5 causes per category
+7. For actions: 2-4 interim, 3-5 permanent, 2-3 preventive
 
 ## Output JSON Structure:
 
@@ -1120,6 +1124,8 @@ Generate a bilingual analysis (English and Chinese). **Critical Rules:**
     "preventive_actions_en": ["PA1", "PA2"], "preventive_actions_zh": ["预防措施1", "预防措施2"]
 }}
 
+**IMPORTANT**: The Chinese fields (question_zh, answer_zh, man_zh, etc.) must contain ONLY Chinese characters and technical terms from the whitelist. No English words or sentences.
+
 Generate only the JSON, no other text. Ensure bilingual semantic consistency.
 """
 
@@ -1134,7 +1140,6 @@ Generate only the JSON, no other text. Ensure bilingual semantic consistency.
     
     # 确保 five_why 有5层
     if "five_why" not in result or len(result.get("five_why", [])) != 5:
-        # 生成默认的5-Why结构
         result["five_why"] = []
         for i in range(1, 6):
             result["five_why"].append({
@@ -1257,50 +1262,80 @@ class TimeSeriesAnalyzer:
         return fig
 
 
-# ==================== 关联规则挖掘 ====================
+# ==================== 关联规则挖掘（双语）====================
 
-def mine_association_rules(symptom_en: str, installation_en: str, temperature: str, lang: str) -> List[dict]:
-    """挖掘关联规则"""
-    prompt = f"""Based on the failure information, discover potential association rules:
+def mine_association_rules_bilingual(symptom_en: str, installation_en: str, 
+                                      temperature: str, lang: str) -> List[dict]:
+    """挖掘关联规则（双语输出）"""
+    
+    # 根据目标语言决定输出语言
+    output_lang = "Chinese" if lang == "zh" else "English"
+    
+    prompt = f"""Based on the failure information, discover potential association rules.
 
 Symptom: {symptom_en}
 Installation: {installation_en if installation_en else 'unknown'}
 Temperature: {temperature if temperature else 'unknown'}
 
-Output 2-3 possible association rules as JSON array:
-[{{"antecedents": ["condition1", "condition2"], "consequents": ["result"], "confidence": 0.8, "explanation": "explanation"}}]"""
+Output 2-3 association rules as JSON array. The explanation MUST be in {output_lang}.
+
+Example for Chinese: {{"antecedents": ["高温>70°C", "上层安装"], "consequents": ["进水短路"], "confidence": 0.85, "explanation": "当安装在上层黑色金属表面的灯具遇到高温时，密封材料膨胀产生间隙，雨水渗入导致短路"}}
+
+Example for English: {{"antecedents": ["high temperature >70°C", "upper installation"], "consequents": ["water ingress short circuit"], "confidence": 0.85, "explanation": "When luminaires installed on upper black metal surfaces experience high temperatures, seal materials expand creating gaps, allowing water ingress and short circuits"}}
+
+Output only the JSON array, no other text."""
     
-    response = call_llm(prompt, max_tokens=500, temperature=0.4)
+    response = call_llm(prompt, max_tokens=800, temperature=0.4)
     try:
         start = response.find('[')
         end = response.rfind(']') + 1
         if start != -1:
-            return json.loads(response[start:end])[:3]
+            rules = json.loads(response[start:end])
+            # 清理规则中的星号标记
+            for rule in rules[:3]:
+                if "explanation" in rule:
+                    rule["explanation"] = remove_bold_markers(rule["explanation"])
+            return rules[:3]
     except:
         pass
-    return []
+    
+    # 返回默认规则
+    if lang == "zh":
+        return [{
+            "antecedents": ["分析中"],
+            "consequents": ["待确认"],
+            "confidence": 0.5,
+            "explanation": "基于当前信息未发现明显的关联规则，建议收集更多数据。"
+        }]
+    else:
+        return [{
+            "antecedents": ["analyzing"],
+            "consequents": ["to be confirmed"],
+            "confidence": 0.5,
+            "explanation": "No significant association rules found based on current information. More data collection recommended."
+        }]
 
 
-# ==================== 报告生成器（双语）====================
+# ==================== 报告生成器（双语，无星号）====================
 
 def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
-    """生成FA报告（纯指定语言，专业术语保留）"""
+    """生成FA报告（纯指定语言，专业术语保留，无星号标记）"""
     stage_name = get_stage_name(result.failure_stage, lang)
     stage_emoji = {0: "✅", 1: "⚠️", 2: "🔥", 3: "🚨"}.get(result.failure_stage, "📌")
     
     # 根据语言选择内容
     if lang == "zh":
         symptom_text = result.symptom
-        root_cause = result.root_cause_zh
-        interim_actions = result.interim_actions_zh
-        permanent_actions = result.permanent_actions_zh
-        preventive_actions = result.preventive_actions_zh
+        root_cause = remove_bold_markers(result.root_cause_zh)
+        interim_actions = [remove_bold_markers(a) for a in result.interim_actions_zh]
+        permanent_actions = [remove_bold_markers(a) for a in result.permanent_actions_zh]
+        preventive_actions = [remove_bold_markers(a) for a in result.preventive_actions_zh]
     else:
         symptom_text = result.symptom_en
-        root_cause = result.root_cause_en
-        interim_actions = result.interim_actions_en
-        permanent_actions = result.permanent_actions_en
-        preventive_actions = result.preventive_actions_en
+        root_cause = remove_bold_markers(result.root_cause_en)
+        interim_actions = [remove_bold_markers(a) for a in result.interim_actions_en]
+        permanent_actions = [remove_bold_markers(a) for a in result.permanent_actions_en]
+        preventive_actions = [remove_bold_markers(a) for a in result.preventive_actions_en]
     
     fault_summary = symptom_text[:30] + "..." if len(symptom_text) > 30 else symptom_text
     
@@ -1320,26 +1355,26 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
     stage_section = f"""
 ## {get_text('stage_label')}
 
-{stage_emoji} **{stage_name}** ({get_text('confidence')}: {result.root_cause_confidence:.0%})
+{stage_emoji} {stage_name} ({get_text('confidence')}: {result.root_cause_confidence:.0%})
 
 """
     
-    # 5-Why - 表格形式
-    five_why_table = "| Level | Question | Answer | Confidence |\n|-------|----------|--------|------------|\n"
+    # 5-Why - 表格形式（使用 get_text 获取表头）
+    five_why_table = f"| Level | {get_text('question_label')} | {get_text('answer_label')} | {get_text('confidence')} |\n|-------|----------|--------|------------|\n"
     five_why_list = ""
     
     for item in result.five_why:
         if lang == "zh":
-            question = item.question_zh
-            answer = item.answer_zh
+            question = remove_bold_markers(item.question_zh)
+            answer = remove_bold_markers(item.answer_zh)
         else:
-            question = item.question_en
-            answer = item.answer_en
+            question = remove_bold_markers(item.question_en)
+            answer = remove_bold_markers(item.answer_en)
         
         q_short = question[:45] + "..." if len(question) > 45 else question
         a_short = answer[:55] + "..." if len(answer) > 55 else answer
         five_why_table += f"| Why-{item.level} | {q_short} | {a_short} | {item.confidence:.0%} |\n"
-        five_why_list += f"\n**Why-{item.level}**: {question}\n→ {answer}\n*{get_text('confidence')}: {item.confidence:.0%}*\n"
+        five_why_list += f"\n**Why-{item.level}**: {question}\n→ {answer}\n({get_text('confidence')}: {item.confidence:.0%})\n"
     
     five_why_section = f"""
 ## {get_text('five_why_title')}
@@ -1370,7 +1405,7 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
     for cat, causes in fishbone_dict.items():
         if causes:
             display_cat = cat_names_zh.get(cat, cat) if lang == "zh" else cat
-            fishbone_text += f"\n**{display_cat}**:\n" + "\n".join([f"- {c}" for c in causes[:4]]) + "\n"
+            fishbone_text += f"\n{display_cat}:\n" + "\n".join([f"- {remove_bold_markers(c)}" for c in causes[:4]]) + "\n"
     
     fishbone_section = f"""
 ## {get_text('fishbone_title')}
@@ -1394,7 +1429,7 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
 
 
 def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
-    """生成8D报告（纯指定语言，专业术语保留）"""
+    """生成8D报告（纯指定语言，专业术语保留，无星号标记）"""
     stage_name = get_stage_name(result.failure_stage, lang)
     stage_emoji = {0: "✅", 1: "⚠️", 2: "🔥", 3: "🚨"}.get(result.failure_stage, "📌")
     
@@ -1402,17 +1437,17 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
     if lang == "zh":
         symptom_text = result.symptom
         installation_text = result.installation
-        root_cause = result.root_cause_zh
-        interim_actions = result.interim_actions_zh
-        permanent_actions = result.permanent_actions_zh
-        preventive_actions = result.preventive_actions_zh
+        root_cause = remove_bold_markers(result.root_cause_zh)
+        interim_actions = [remove_bold_markers(a) for a in result.interim_actions_zh]
+        permanent_actions = [remove_bold_markers(a) for a in result.permanent_actions_zh]
+        preventive_actions = [remove_bold_markers(a) for a in result.preventive_actions_zh]
     else:
         symptom_text = result.symptom_en
         installation_text = result.installation_en
-        root_cause = result.root_cause_en
-        interim_actions = result.interim_actions_en
-        permanent_actions = result.permanent_actions_en
-        preventive_actions = result.preventive_actions_en
+        root_cause = remove_bold_markers(result.root_cause_en)
+        interim_actions = [remove_bold_markers(a) for a in result.interim_actions_en]
+        permanent_actions = [remove_bold_markers(a) for a in result.permanent_actions_en]
+        preventive_actions = [remove_bold_markers(a) for a in result.preventive_actions_en]
     
     fault_summary = symptom_text[:30] + "..." if len(symptom_text) > 30 else symptom_text
     
@@ -1441,10 +1476,12 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 """
     
     # D2 5W2H
+    # 清理症状文本中的换行和星号
+    symptom_clean = remove_bold_markers(symptom_text).replace('\n', ' ')
     d2 = f"""
 ## D2: {get_text('problem_description')}
 
-| {get_text('what')} | {symptom_text[:200]} |
+| {get_text('what')} | {symptom_clean[:200]} |
 | {get_text('where')} | {installation_text if installation_text else 'Installation site'} |
 | {get_text('when')} | {datetime.now().strftime('%Y-%m-%d')} |
 | {get_text('who')} | Field maintenance team |
@@ -1466,11 +1503,11 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
     five_why_list = ""
     for item in result.five_why:
         if lang == "zh":
-            question = item.question_zh
-            answer = item.answer_zh
+            question = remove_bold_markers(item.question_zh)
+            answer = remove_bold_markers(item.answer_zh)
         else:
-            question = item.question_en
-            answer = item.answer_en
+            question = remove_bold_markers(item.question_en)
+            answer = remove_bold_markers(item.answer_en)
         five_why_list += f"\n**Why-{item.level}**: {question}\n→ {answer}\n"
     
     fishbone_dict = result.fishbone.to_dict(lang)
@@ -1481,7 +1518,7 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
     for cat, causes in fishbone_dict.items():
         if causes:
             display_cat = cat_names_zh.get(cat, cat) if lang == "zh" else cat
-            fishbone_text += f"\n**{display_cat}**: {', '.join(causes[:3])}\n"
+            fishbone_text += f"\n**{display_cat}**: {', '.join([remove_bold_markers(c) for c in causes[:3]])}\n"
     
     d4 = f"""
 ## D4: {get_text('root_cause_analysis')}
@@ -1559,11 +1596,11 @@ def create_word_document(report_content: str, result: FailureAnalysisResult,
             line = lines[i].strip()
             
             if line.startswith('# '):
-                doc.add_heading(line[2:], level=1)
+                doc.add_heading(remove_bold_markers(line[2:]), level=1)
             elif line.startswith('## '):
-                doc.add_heading(line[3:], level=2)
+                doc.add_heading(remove_bold_markers(line[3:]), level=2)
             elif line.startswith('### '):
-                doc.add_heading(line[4:], level=3)
+                doc.add_heading(remove_bold_markers(line[4:]), level=3)
             elif line.startswith('|') and '|' in line[1:]:
                 # 处理表格
                 table_lines = []
@@ -1582,17 +1619,17 @@ def create_word_document(report_content: str, result: FailureAnalysisResult,
                         table = doc.add_table(rows=1+len(data_lines), cols=len(header_cells))
                         table.style = 'Table Grid'
                         for col, cell_text in enumerate(header_cells):
-                            table.cell(0, col).text = cell_text
+                            table.cell(0, col).text = remove_bold_markers(cell_text)
                         
                         for row_idx, data_line in enumerate(data_lines):
                             cells = [c.strip() for c in data_line.split('|')[1:-1]]
                             for col_idx, cell_text in enumerate(cells):
                                 if col_idx < len(header_cells):
-                                    table.cell(row_idx+1, col_idx).text = cell_text
+                                    table.cell(row_idx+1, col_idx).text = remove_bold_markers(cell_text)
                         doc.add_paragraph()
                 continue
             elif line:
-                doc.add_paragraph(line)
+                doc.add_paragraph(remove_bold_markers(line))
             else:
                 doc.add_paragraph()
             
@@ -1601,14 +1638,14 @@ def create_word_document(report_content: str, result: FailureAnalysisResult,
         # 插入鱼骨图
         if fishbone_image:
             doc.add_page_break()
-            doc.add_heading(get_text("fishbone_title"), level=2)
+            doc.add_heading(remove_bold_markers(get_text("fishbone_title")), level=2)
             img_stream = io.BytesIO(fishbone_image)
             doc.add_picture(img_stream, width=Inches(12))
         
         # 插入故障照片
         if uploaded_images and len(uploaded_images) > 0:
             doc.add_page_break()
-            doc.add_heading(get_text("fault_photos"), level=2)
+            doc.add_heading(remove_bold_markers(get_text("fault_photos")), level=2)
             for idx, img_bytes in enumerate(uploaded_images[:5]):
                 try:
                     img_stream = io.BytesIO(img_bytes)
@@ -1653,12 +1690,12 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     # 中文检索
     kb_results_zh = kb.search_knowledge_dual(symptom, "zh")
     if kb_results_zh:
-        context_parts.append("【中文知识库案例】\n" + "\n".join(f"- {r[:200]}" for r in kb_results_zh[:5]))
+        context_parts.append("【中文知识库案例】\n" + "\n".join(f"- {remove_bold_markers(r[:200])}" for r in kb_results_zh[:5]))
     
     # 英文检索
     kb_results_en = kb.search_knowledge_dual(symptom_en, "en")
     if kb_results_en:
-        context_parts.append("【English Knowledge Base】\n" + "\n".join(f"- {r[:200]}" for r in kb_results_en[:5]))
+        context_parts.append("【English Knowledge Base】\n" + "\n".join(f"- {remove_bold_markers(r[:200])}" for r in kb_results_en[:5]))
     
     # 联网搜索（中文优先）
     if enable_web:
@@ -1681,10 +1718,10 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     for item_data in bilingual_result.get("five_why", []):
         five_why_items.append(FiveWhyItem(
             level=item_data.get("level", 1),
-            question_en=item_data.get("question_en", ""),
-            question_zh=item_data.get("question_zh", ""),
-            answer_en=item_data.get("answer_en", ""),
-            answer_zh=item_data.get("answer_zh", ""),
+            question_en=remove_bold_markers(item_data.get("question_en", "")),
+            question_zh=remove_bold_markers(item_data.get("question_zh", "")),
+            answer_en=remove_bold_markers(item_data.get("answer_en", "")),
+            answer_zh=remove_bold_markers(item_data.get("answer_zh", "")),
             confidence=item_data.get("confidence", 0.7),
             verification_method="建议通过测试验证"
         ))
@@ -1705,18 +1742,18 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     # 6. 构建鱼骨图
     fishbone_data = bilingual_result.get("fishbone", {})
     fishbone = FishboneAnalysis(
-        man_en=fishbone_data.get("man_en", []),
-        man_zh=fishbone_data.get("man_zh", []),
-        machine_en=fishbone_data.get("machine_en", []),
-        machine_zh=fishbone_data.get("machine_zh", []),
-        material_en=fishbone_data.get("material_en", []),
-        material_zh=fishbone_data.get("material_zh", []),
-        method_en=fishbone_data.get("method_en", []),
-        method_zh=fishbone_data.get("method_zh", []),
-        environment_en=fishbone_data.get("environment_en", []),
-        environment_zh=fishbone_data.get("environment_zh", []),
-        measurement_en=fishbone_data.get("measurement_en", []),
-        measurement_zh=fishbone_data.get("measurement_zh", [])
+        man_en=[remove_bold_markers(c) for c in fishbone_data.get("man_en", [])],
+        man_zh=[remove_bold_markers(c) for c in fishbone_data.get("man_zh", [])],
+        machine_en=[remove_bold_markers(c) for c in fishbone_data.get("machine_en", [])],
+        machine_zh=[remove_bold_markers(c) for c in fishbone_data.get("machine_zh", [])],
+        material_en=[remove_bold_markers(c) for c in fishbone_data.get("material_en", [])],
+        material_zh=[remove_bold_markers(c) for c in fishbone_data.get("material_zh", [])],
+        method_en=[remove_bold_markers(c) for c in fishbone_data.get("method_en", [])],
+        method_zh=[remove_bold_markers(c) for c in fishbone_data.get("method_zh", [])],
+        environment_en=[remove_bold_markers(c) for c in fishbone_data.get("environment_en", [])],
+        environment_zh=[remove_bold_markers(c) for c in fishbone_data.get("environment_zh", [])],
+        measurement_en=[remove_bold_markers(c) for c in fishbone_data.get("measurement_en", [])],
+        measurement_zh=[remove_bold_markers(c) for c in fishbone_data.get("measurement_zh", [])]
     )
     
     # 7. 生成鱼骨图图片
@@ -1727,10 +1764,10 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     if timeseries_df is not None and len(timeseries_df) > 0:
         spc_analysis = TimeSeriesAnalyzer.analyze_trend(timeseries_df)
     
-    # 9. 关联规则
+    # 9. 关联规则（双语）
     association_rules = []
     if enable_rules:
-        association_rules = mine_association_rules(symptom_en, installation_en, temperature, lang)
+        association_rules = mine_association_rules_bilingual(symptom_en, installation_en, temperature, lang)
     
     # 10. 返回结果
     return FailureAnalysisResult(
@@ -1745,15 +1782,15 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
         failure_stage=stage,
         five_why=five_why_items,
         fishbone=fishbone,
-        root_cause_en=bilingual_result.get("root_cause_en", ""),
-        root_cause_zh=bilingual_result.get("root_cause_zh", ""),
+        root_cause_en=remove_bold_markers(bilingual_result.get("root_cause_en", "")),
+        root_cause_zh=remove_bold_markers(bilingual_result.get("root_cause_zh", "")),
         root_cause_confidence=bilingual_result.get("root_cause_confidence", 0.7),
-        interim_actions_en=bilingual_result.get("interim_actions_en", []),
-        interim_actions_zh=bilingual_result.get("interim_actions_zh", []),
-        permanent_actions_en=bilingual_result.get("permanent_actions_en", []),
-        permanent_actions_zh=bilingual_result.get("permanent_actions_zh", []),
-        preventive_actions_en=bilingual_result.get("preventive_actions_en", []),
-        preventive_actions_zh=bilingual_result.get("preventive_actions_zh", []),
+        interim_actions_en=[remove_bold_markers(a) for a in bilingual_result.get("interim_actions_en", [])],
+        interim_actions_zh=[remove_bold_markers(a) for a in bilingual_result.get("interim_actions_zh", [])],
+        permanent_actions_en=[remove_bold_markers(a) for a in bilingual_result.get("permanent_actions_en", [])],
+        permanent_actions_zh=[remove_bold_markers(a) for a in bilingual_result.get("permanent_actions_zh", [])],
+        preventive_actions_en=[remove_bold_markers(a) for a in bilingual_result.get("preventive_actions_en", [])],
+        preventive_actions_zh=[remove_bold_markers(a) for a in bilingual_result.get("preventive_actions_zh", [])],
         internal_cases_used=len(kb_results_zh) + len(kb_results_en),
         external_sources_used=1 if enable_web and context_info != "No similar cases found in knowledge base." else 0,
         spc_analysis=spc_analysis,
@@ -1937,11 +1974,11 @@ def main():
         with st.expander(get_text("five_why_title"), expanded=True):
             for item in result.five_why:
                 if lang == "zh":
-                    question = item.question_zh
-                    answer = item.answer_zh
+                    question = remove_bold_markers(item.question_zh)
+                    answer = remove_bold_markers(item.answer_zh)
                 else:
-                    question = item.question_en
-                    answer = item.answer_en
+                    question = remove_bold_markers(item.question_en)
+                    answer = remove_bold_markers(item.answer_en)
                 st.markdown(f"**Why-{item.level}**: {question}")
                 st.markdown(f"→ {answer}")
                 st.progress(item.confidence, text=f"{get_text('confidence')}: {item.confidence:.0%}")
@@ -1959,7 +1996,7 @@ def main():
                         display_cat = cat_names_zh.get(cat, cat) if lang == "zh" else cat
                         st.markdown(f"**{display_cat}**")
                         for c in causes[:4]:
-                            st.markdown(f"- {c}")
+                            st.markdown(f"- {remove_bold_markers(c)}")
         
         if result.spc_analysis and result.spc_analysis.get("has_data"):
             with st.expander(get_text("spc_title")):
@@ -1971,13 +2008,14 @@ def main():
                 for rule in result.association_rules:
                     antecedents = " + ".join(rule.get("antecedents", []))
                     consequents = " + ".join(rule.get("consequents", []))
-                    st.info(f"{antecedents} → {consequents} (Confidence: {rule.get('confidence', 0):.0%})")
+                    explanation = remove_bold_markers(rule.get("explanation", ""))
+                    st.info(f"{antecedents} → {consequents} (Confidence: {rule.get('confidence', 0):.0%})\n\n{explanation}")
         
         st.markdown(f"### {get_text('root_cause_title')}")
         if lang == "zh":
-            st.success(result.root_cause_zh)
+            st.success(remove_bold_markers(result.root_cause_zh))
         else:
-            st.success(result.root_cause_en)
+            st.success(remove_bold_markers(result.root_cause_en))
         
         col_btn1, col_btn2, col_btn3 = st.columns(3)
         with col_btn1:
