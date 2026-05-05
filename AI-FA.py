@@ -2,12 +2,14 @@
 AI-FA 智能故障分析系统
 AI-powered Failure Analysis & 8D Report Generation
 
-版本: 3.0.1
-更新: 修复
-- 表格表头使用 get_text() 实现双语
-- 关联规则支持双语输出
-- 报告中的 ** 星号标记已清理
-- 鱼骨图中文内容强制100%中文
+版本: 3.1.0
+更新: 
+- 集成 TechLife Portal 计费逻辑
+- 侧边栏显示用户名和实时剩余次数
+- 三个按钮（分析、FA报告、8D报告）各自扣费
+- 分析完成后才启用报告按钮
+- 免费版次数不足时按钮禁用
+- 专业版无限使用
 """
 
 import streamlit as st
@@ -67,6 +69,173 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+
+# ==================== 接收门户参数 ====================
+
+query_params = st.query_params
+
+if "user_id" in query_params:
+    # 获取 user_id
+    user_id_val = query_params["user_id"]
+    if isinstance(user_id_val, list):
+        st.session_state.user_id = user_id_val[0]
+    else:
+        st.session_state.user_id = user_id_val
+    
+    # 获取 email
+    email_val = query_params.get("email", "")
+    if isinstance(email_val, list):
+        st.session_state.user_email = email_val[0] if email_val else ""
+    else:
+        st.session_state.user_email = email_val
+    
+    # 从邮箱提取用户名
+    if st.session_state.user_email and "@" in st.session_state.user_email:
+        st.session_state.username = st.session_state.user_email.split('@')[0]
+    else:
+        st.session_state.username = "User"
+    
+    # 设置语言
+    if "lang" in query_params:
+        lang_val = query_params["lang"]
+        if isinstance(lang_val, list):
+            lang_val = lang_val[0]
+        st.session_state.lang = lang_val if lang_val in ["zh", "en"] else "zh"
+    else:
+        st.session_state.lang = "zh"
+    
+    # 接收剩余次数（仅用于初始显示）
+    if "trials_left" in query_params:
+        trials_val = query_params["trials_left"]
+        if isinstance(trials_val, list):
+            trials_val = trials_val[0]
+        st.session_state.trials_left = int(trials_val)
+else:
+    st.warning("请从 TechLife Suite 门户登录后访问")
+    st.stop()
+
+
+# ==================== Supabase 配置 ====================
+
+HEADERS = {
+    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+    "Content-Type": "application/json"
+}
+
+
+def supabase_get(table: str, user_id: str = None):
+    """GET 请求"""
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    if user_id:
+        url += f"?id=eq.{user_id}"
+    response = requests.get(url, headers=HEADERS)
+    return response
+
+
+def supabase_patch(table: str, user_id: str, data: dict):
+    """PATCH 请求（更新）"""
+    url = f"{SUPABASE_URL}/rest/v1/{table}?id=eq.{user_id}"
+    response = requests.patch(url, headers=HEADERS, json=data)
+    return response
+
+
+def supabase_post(table: str, data: dict):
+    """POST 请求"""
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    response = requests.post(url, headers=HEADERS, json=data)
+    return response
+
+
+def get_user_remaining_trials(user_id: str) -> tuple:
+    """
+    从数据库实时获取剩余次数和订阅类型
+    返回: (remaining, tier, expires_at, error_msg)
+    - remaining: -1 表示无限（专业版），>=0 表示剩余次数
+    - tier: "free" 或 "pro"
+    """
+    try:
+        response = supabase_get("profiles", user_id)
+        if response.status_code == 200 and response.json():
+            data = response.json()[0]
+            tier = data.get("subscription_tier", "free")
+            remaining = data.get("free_trials_remaining", 30)
+            expires_at = data.get("subscription_expires_at")
+            
+            if tier == "pro":
+                return -1, "pro", expires_at, ""
+            return remaining, "free", expires_at, ""
+    except Exception as e:
+        return None, None, None, f"查询失败: {str(e)}"
+    
+    return 30, "free", None, ""
+
+
+def consume_trial(user_id: str, app_name: str, action_name: str) -> tuple:
+    """
+    消耗一次免费次数
+    返回: (是否成功, 剩余次数, 错误信息)
+    """
+    try:
+        # 获取当前用户状态
+        resp = supabase_get("profiles", user_id)
+        if resp.status_code != 200 or not resp.json():
+            return False, 0, "用户不存在"
+        
+        current = resp.json()[0].get("free_trials_remaining", 30)
+        tier = resp.json()[0].get("subscription_tier", "free")
+        
+        # 专业版无限使用
+        if tier == "pro":
+            return True, -1, ""
+        
+        if current <= 0:
+            return False, 0, f"免费次数已用完（共30次），请联系管理员升级。\n\n当前剩余: {current} 次"
+        
+        # 更新剩余次数
+        patch_resp = supabase_patch("profiles", user_id, {"free_trials_remaining": current - 1})
+        
+        if patch_resp.status_code not in [200, 204]:
+            return False, 0, f"更新失败: {patch_resp.text}"
+        
+        # 记录使用日志
+        supabase_post("usage_logs", {
+            "user_id": user_id,
+            "app_name": app_name,
+            "action_name": action_name,
+            "analysis_count": 1,
+            "used_at": datetime.now().isoformat()
+        })
+        
+        return True, current - 1, ""
+        
+    except Exception as e:
+        return False, 0, f"计数失败: {str(e)}"
+
+
+# ==================== 侧边栏（显示用户信息和实时剩余次数）===================
+
+def render_sidebar_user_info():
+    """渲染侧边栏用户信息和剩余次数（实时查询）"""
+    with st.sidebar:
+        # 显示用户名
+        st.markdown(f"### 👤 {st.session_state.username}")
+        
+        # 实时查询剩余次数
+        remaining, tier, expires_at, error = get_user_remaining_trials(st.session_state.user_id)
+        
+        if error:
+            st.error(error)
+        else:
+            if tier == "pro":
+                st.info("🎫 剩余免费次数: ∞ (专业版)")
+                if expires_at:
+                    st.caption(f"📅 到期: {expires_at[:10]}")
+            else:
+                st.info(f"🎫 剩余免费次数: {remaining}")
+        
+        st.markdown("---")
 
 
 # ==================== 数据模型（双语版本）====================
@@ -298,39 +467,38 @@ TEXTS = {
         "import_kb": "导入知识库（Excel）",
         "import_success": "导入成功！共导入 {count} 条记录",
 
-            # 在 TEXTS["zh"] 中添加以下内容（放在 "analyst_title_ph" 之后，最后一个花括号之前）
-    "team_role": "角色",
-    "team_responsibility": "职责",
-    "team_leader": "团队负责人",
-    "team_leader_resp": "总体协调",
-    "design_engineer": "设计工程师",
-    "design_engineer_resp": "技术分析",
-    "quality_engineer": "质量工程师",
-    "quality_engineer_resp": "质量验证",
-    "discovery_location": "发现位置",
-    "discovery_person": "发现人",
-    "preliminary_judgment": "初步判断",
-    "occurrence_process": "发生过程",
-    "affected_quantity": "影响数量",
-    "installation_site": "安装现场",
-    "field_maintenance_team": "现场维护团队",
-    "under_investigation": "调查中",
-    "failure_during_operation": "运行过程中发生故障",
-    "fishbone_analysis_title": "鱼骨图分析",
-    "five_why_analysis_title": "5-Why 分析",
-    "verified_root_cause_title": "验证后的根本原因",
-    "verification_item": "项目",
-    "verification_method": "方法",
-    "verification_criteria": "标准",
-    "function_test": "功能",
-    "function_test_method": "实际测试",
-    "function_test_criteria": "正常运行",
-    "durability_test": "耐久性",
-    "durability_test_method": "加速老化",
-    "durability_test_criteria": "满足设计寿命",
-    "d8_recognition_1": "根本原因已确认",
-    "d8_recognition_2": "改进措施已定义",
-    "d8_recognition_3": "经验教训已加入知识库",
+        "team_role": "角色",
+        "team_responsibility": "职责",
+        "team_leader": "团队负责人",
+        "team_leader_resp": "总体协调",
+        "design_engineer": "设计工程师",
+        "design_engineer_resp": "技术分析",
+        "quality_engineer": "质量工程师",
+        "quality_engineer_resp": "质量验证",
+        "discovery_location": "发现位置",
+        "discovery_person": "发现人",
+        "preliminary_judgment": "初步判断",
+        "occurrence_process": "发生过程",
+        "affected_quantity": "影响数量",
+        "installation_site": "安装现场",
+        "field_maintenance_team": "现场维护团队",
+        "under_investigation": "调查中",
+        "failure_during_operation": "运行过程中发生故障",
+        "fishbone_analysis_title": "鱼骨图分析",
+        "five_why_analysis_title": "5-Why 分析",
+        "verified_root_cause_title": "验证后的根本原因",
+        "verification_item": "项目",
+        "verification_method": "方法",
+        "verification_criteria": "标准",
+        "function_test": "功能",
+        "function_test_method": "实际测试",
+        "function_test_criteria": "正常运行",
+        "durability_test": "耐久性",
+        "durability_test_method": "加速老化",
+        "durability_test_criteria": "满足设计寿命",
+        "d8_recognition_1": "根本原因已确认",
+        "d8_recognition_2": "改进措施已定义",
+        "d8_recognition_3": "经验教训已加入知识库",
         
         "establish_team": "建立团队",
         "problem_description": "问题描述",
@@ -341,6 +509,9 @@ TEXTS = {
         "detailed_description": "详细说明",
         "question_label": "问题",
         "answer_label": "答案",
+        
+        "trials_insufficient": "免费次数已用完，请联系管理员升级到专业版",
+        "click_to_upgrade": "升级专业版",
     },
     "en": {
         "app_title": "AI-FA Intelligent Failure Analysis System",
@@ -472,6 +643,9 @@ TEXTS = {
         "detailed_description": "Detailed Description",
         "question_label": "Question",
         "answer_label": "Answer",
+        
+        "trials_insufficient": "Free trials exhausted. Please upgrade to Pro.",
+        "click_to_upgrade": "Upgrade to Pro",
     }
 }
 
@@ -501,9 +675,7 @@ def remove_bold_markers(text: str) -> str:
     """删除文本中的**粗体标记，同时清理Markdown语法"""
     if not text:
         return text
-    # 去除 **text** 格式
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-    # 去除 *text* 格式（斜体）
     text = re.sub(r'\*([^*]+)\*', r'\1', text)
     return text
 
@@ -563,11 +735,7 @@ def translate_to_en(text: str) -> str:
         return text
     
     terms_str = ", ".join(TECHNICAL_TERMS)
-    prompt = f"""请将以下文本翻译成英文。注意：{terms_str} 等专业术语保持原样不翻译。
-
-文本：{text}
-
-只输出翻译结果，不要其他内容："""
+    prompt = f"请将以下文本翻译成英文。注意：{terms_str} 等专业术语保持原样不翻译。\n\n文本：{text}\n\n只输出翻译结果，不要其他内容："
     
     try:
         response = client.chat.completions.create(
@@ -591,11 +759,7 @@ def translate_to_zh(text: str) -> str:
         return text
     
     terms_str = ", ".join(TECHNICAL_TERMS)
-    prompt = f"""请将以下文本翻译成中文。注意：{terms_str} 等专业术语保持原样不翻译。
-
-文本：{text}
-
-只输出翻译结果，不要其他内容："""
+    prompt = f"请将以下文本翻译成中文。注意：{terms_str} 等专业术语保持原样不翻译。\n\n文本：{text}\n\n只输出翻译结果，不要其他内容："
     
     try:
         response = client.chat.completions.create(
@@ -1090,20 +1254,9 @@ def call_bilingual_analysis(product_name: str, symptom_en: str, installation_en:
     
     返回格式：
     {
-        "five_why": [
-            {"level": 1, "question_en": "...", "question_zh": "...", 
-             "answer_en": "...", "answer_zh": "...", "confidence": 0.95},
-            ...
-        ],
-        "fishbone": {
-            "man_en": [...], "man_zh": [...],
-            "machine_en": [...], "machine_zh": [...],
-            "material_en": [...], "material_zh": [...],
-            "method_en": [...], "method_zh": [...],
-            "environment_en": [...], "environment_zh": [...],
-            "measurement_en": [...], "measurement_zh": [...]
-        },
-        "root_cause_en": "...", "root_cause_zh": "...", "root_cause_confidence": 0.9,
+        "five_why": [...],
+        "fishbone": {...},
+        "root_cause_en": "...", "root_cause_zh": "...",
         "interim_actions_en": [...], "interim_actions_zh": [...],
         "permanent_actions_en": [...], "permanent_actions_zh": [...],
         "preventive_actions_en": [...], "preventive_actions_zh": [...]
@@ -1158,17 +1311,14 @@ Generate a bilingual analysis (English and Chinese). **Critical Rules:**
     "preventive_actions_en": ["PA1", "PA2"], "preventive_actions_zh": ["预防措施1", "预防措施2"]
 }}
 
-**IMPORTANT**: The Chinese fields (question_zh, answer_zh, man_zh, etc.) must contain ONLY Chinese characters and technical terms from the whitelist. No English words or sentences.
+**IMPORTANT**: The Chinese fields (question_zh, answer_zh, man_zh, etc.) must contain ONLY Chinese characters and technical terms from the whitelist.
 
-Generate only the JSON, no other text. Ensure bilingual semantic consistency.
-"""
-
+Generate only the JSON, no other text."""
+    
     response = call_llm(prompt, max_tokens=5000, temperature=0.3)
     
-    # 解析JSON，支持降级处理
     result = safe_json_parse(response)
     
-    # 降级处理：如果缺少某些字段，用默认值填充
     if not result:
         result = {}
     
@@ -1302,7 +1452,6 @@ def mine_association_rules_bilingual(symptom_en: str, installation_en: str,
                                       temperature: str, lang: str) -> List[dict]:
     """挖掘关联规则（双语输出）"""
     
-    # 根据目标语言决定输出语言
     output_lang = "Chinese" if lang == "zh" else "English"
     
     prompt = f"""Based on the failure information, discover potential association rules.
@@ -1325,7 +1474,6 @@ Output only the JSON array, no other text."""
         end = response.rfind(']') + 1
         if start != -1:
             rules = json.loads(response[start:end])
-            # 清理规则中的星号标记
             for rule in rules[:3]:
                 if "explanation" in rule:
                     rule["explanation"] = remove_bold_markers(rule["explanation"])
@@ -1333,7 +1481,6 @@ Output only the JSON array, no other text."""
     except:
         pass
     
-    # 返回默认规则
     if lang == "zh":
         return [{
             "antecedents": ["分析中"],
@@ -1346,7 +1493,7 @@ Output only the JSON array, no other text."""
             "antecedents": ["analyzing"],
             "consequents": ["to be confirmed"],
             "confidence": 0.5,
-            "explanation": "No significant association rules found based on current information. More data collection recommended."
+            "explanation": "No significant association rules found. More data collection recommended."
         }]
 
 
@@ -1357,7 +1504,6 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
     stage_name = get_stage_name(result.failure_stage, lang)
     stage_emoji = {0: "✅", 1: "⚠️", 2: "🔥", 3: "🚨"}.get(result.failure_stage, "📌")
     
-    # 根据语言选择内容
     if lang == "zh":
         symptom_text = result.symptom
         root_cause = remove_bold_markers(result.root_cause_zh)
@@ -1373,7 +1519,6 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
     
     fault_summary = symptom_text[:30] + "..." if len(symptom_text) > 30 else symptom_text
     
-    # 信息表格
     info_table = f"""
 ## {get_text('report_info')}
 
@@ -1385,7 +1530,6 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # 失效等级
     stage_section = f"""
 ## {get_text('stage_label')}
 
@@ -1393,7 +1537,6 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # 5-Why - 表格形式（使用 get_text 获取表头）
     five_why_table = f"| Level | {get_text('question_label')} | {get_text('answer_label')} | {get_text('confidence')} |\n|-------|----------|--------|------------|\n"
     five_why_list = ""
     
@@ -1422,7 +1565,6 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
 {five_why_list}
 """
     
-    # 根因
     root_cause_section = f"""
 ## {get_text('root_cause_title')}
 
@@ -1430,7 +1572,6 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # 鱼骨图文字版
     fishbone_dict = result.fishbone.to_dict(lang)
     fishbone_text = ""
     cat_names_zh = {"Man": "人", "Machine": "机", "Material": "料",
@@ -1447,7 +1588,6 @@ def generate_fa_report(result: FailureAnalysisResult, lang: str) -> str:
 {fishbone_text}
 """
     
-    # 改进措施
     actions_text = f"""
 ### {get_text('interim_actions')}
 {chr(10).join(f'{i+1}. {a}' for i, a in enumerate(interim_actions[:3]))}
@@ -1467,7 +1607,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
     stage_name = get_stage_name(result.failure_stage, lang)
     stage_emoji = {0: "✅", 1: "⚠️", 2: "🔥", 3: "🚨"}.get(result.failure_stage, "📌")
     
-    # 根据语言选择内容
     if lang == "zh":
         symptom_text = remove_bold_markers(result.symptom)
         installation_text = remove_bold_markers(result.installation)
@@ -1476,7 +1615,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
         permanent_actions = [remove_bold_markers(a) for a in result.permanent_actions_zh]
         preventive_actions = [remove_bold_markers(a) for a in result.preventive_actions_zh]
         
-        # 5-Why 中文内容
         five_why_items = []
         for item in result.five_why:
             five_why_items.append({
@@ -1485,12 +1623,10 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
                 "answer": remove_bold_markers(item.answer_zh)
             })
         
-        # 鱼骨图中文内容
         fishbone_dict = result.fishbone.to_dict("zh")
         cat_names = {"Man": "人", "Machine": "机", "Material": "料",
                      "Method": "法", "Environment": "环", "Measurement": "测"}
         
-        # D1 表格中文内容
         d1_table_data = {
             "headers": [get_text("team_role"), get_text("team_responsibility")],
             "rows": [
@@ -1500,7 +1636,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
             ]
         }
         
-        # D6 表格中文内容
         d6_table_data = {
             "headers": [get_text("verification_item"), get_text("verification_method"), get_text("verification_criteria")],
             "rows": [
@@ -1509,22 +1644,19 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
             ]
         }
         
-        # D8 中文内容
         d8_items = [
             get_text("d8_recognition_1"),
             get_text("d8_recognition_2"),
             get_text("d8_recognition_3")
         ]
         
-        # D2 表格中的翻译值
         d2_location_value = get_text("installation_site")
         d2_who_value = get_text("field_maintenance_team")
         d2_why_value = get_text("under_investigation")
         d2_how_value = get_text("failure_during_operation")
-        d2_how_many_value = f"Stage {result.failure_stage} - {stage_name}" if lang == "en" else stage_name
+        d2_how_many_value = stage_name
         
     else:
-        # 英文界面 - 保持原样
         symptom_text = remove_bold_markers(result.symptom_en)
         installation_text = remove_bold_markers(result.installation_en)
         root_cause = remove_bold_markers(result.root_cause_en)
@@ -1571,14 +1703,11 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
         d2_who_value = "Field maintenance team"
         d2_why_value = "Under investigation"
         d2_how_value = "Failure occurred during operation"
-        d2_how_many_value = f"Stage {result.failure_stage} - {stage_name}"
+        d2_how_many_value = stage_name
     
     fault_summary = symptom_text[:30] + "..." if len(symptom_text) > 30 else symptom_text
-    
-    # 清理症状文本中的换行
     symptom_clean = symptom_text.replace('\n', ' ')
     
-    # 信息表格
     info_table = f"""
 ## {get_text('report_info')}
 
@@ -1590,7 +1719,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D1 表格
     d1_table = "| " + " | ".join(d1_table_data["headers"]) + " |\n|" + "|".join(["------" for _ in d1_table_data["headers"]]) + "|\n"
     for row in d1_table_data["rows"]:
         d1_table += "| " + " | ".join(row) + " |\n"
@@ -1601,7 +1729,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 {d1_table}
 """
     
-    # D2 问题描述
     d2 = f"""
 ## D2: {get_text('problem_description')}
 
@@ -1615,7 +1742,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D3 临时措施
     d3 = f"""
 ## D3: {get_text('interim_actions')}
 
@@ -1623,14 +1749,12 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D4 鱼骨图文字
     fishbone_text = ""
     for cat, causes in fishbone_dict.items():
         if causes:
             display_cat = cat_names.get(cat, cat)
             fishbone_text += f"\n**{display_cat}**: {', '.join([remove_bold_markers(c) for c in causes[:3]])}\n"
     
-    # D4 5-Why 列表
     five_why_list = ""
     for item in five_why_items:
         five_why_list += f"\n**Why-{item['level']}**: {item['question']}\n→ {item['answer']}\n"
@@ -1649,7 +1773,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D5 永久措施
     d5 = f"""
 ## D5: {get_text('permanent_actions')}
 
@@ -1657,7 +1780,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D6 效果验证表格
     d6_table = "| " + " | ".join(d6_table_data["headers"]) + " |\n|" + "|".join(["------" for _ in d6_table_data["headers"]]) + "|\n"
     for row in d6_table_data["rows"]:
         d6_table += "| " + " | ".join(row) + " |\n"
@@ -1668,7 +1790,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 {d6_table}
 """
     
-    # D7 预防措施
     d7 = f"""
 ## D7: {get_text('preventive_actions')}
 
@@ -1676,7 +1797,6 @@ def generate_8d_report(result: FailureAnalysisResult, lang: str) -> str:
 
 """
     
-    # D8 总结表彰
     d8_items_formatted = chr(10).join(f'- {item}' for item in d8_items)
     d8 = f"""
 ## D8: {get_text('team_recognition')}
@@ -1699,11 +1819,9 @@ def create_word_document(report_content: str, result: FailureAnalysisResult,
         
         doc = Document()
         
-        # 标题
         title_summary = truncate_summary(result.symptom if lang == "zh" else result.symptom_en, 12)
         title = doc.add_heading(f"{result.product_name} - {title_summary}", level=1)
         
-        # 添加报告内容
         lines = report_content.split('\n')
         i = 0
         while i < len(lines):
@@ -1716,7 +1834,6 @@ def create_word_document(report_content: str, result: FailureAnalysisResult,
             elif line.startswith('### '):
                 doc.add_heading(remove_bold_markers(line[4:]), level=3)
             elif line.startswith('|') and '|' in line[1:]:
-                # 处理表格
                 table_lines = []
                 while i < len(lines) and lines[i].strip().startswith('|'):
                     table_lines.append(lines[i].strip())
@@ -1749,14 +1866,12 @@ def create_word_document(report_content: str, result: FailureAnalysisResult,
             
             i += 1
         
-        # 插入鱼骨图
         if fishbone_image:
             doc.add_page_break()
             doc.add_heading(remove_bold_markers(get_text("fishbone_title")), level=2)
             img_stream = io.BytesIO(fishbone_image)
             doc.add_picture(img_stream, width=Inches(12))
         
-        # 插入故障照片
         if uploaded_images and len(uploaded_images) > 0:
             doc.add_page_break()
             doc.add_heading(remove_bold_markers(get_text("fault_photos")), level=2)
@@ -1798,20 +1913,16 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     # 2. 双语检索（中文优先，英文补充）
     context_parts = []
     
-    # 知识库检索
     kb = SupabaseKnowledgeDB()
     
-    # 中文检索
     kb_results_zh = kb.search_knowledge_dual(symptom, "zh")
     if kb_results_zh:
         context_parts.append("【中文知识库案例】\n" + "\n".join(f"- {remove_bold_markers(r[:200])}" for r in kb_results_zh[:5]))
     
-    # 英文检索
     kb_results_en = kb.search_knowledge_dual(symptom_en, "en")
     if kb_results_en:
         context_parts.append("【English Knowledge Base】\n" + "\n".join(f"- {remove_bold_markers(r[:200])}" for r in kb_results_en[:5]))
     
-    # 联网搜索（中文优先）
     if enable_web:
         web_results = web_search_dual(symptom, lang)
         if web_results and "未找到" not in web_results:
@@ -1840,7 +1951,6 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
             verification_method="建议通过测试验证"
         ))
     
-    # 确保有5层
     while len(five_why_items) < 5:
         level = len(five_why_items) + 1
         five_why_items.append(FiveWhyItem(
@@ -1878,7 +1988,7 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     if timeseries_df is not None and len(timeseries_df) > 0:
         spc_analysis = TimeSeriesAnalyzer.analyze_trend(timeseries_df)
     
-    # 9. 关联规则（双语）
+    # 9. 关联规则
     association_rules = []
     if enable_rules:
         association_rules = mine_association_rules_bilingual(symptom_en, installation_en, temperature, lang)
@@ -1920,15 +2030,15 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
 def main():
     """主应用入口"""
     
-    # 初始化
-    if "lang" not in st.session_state:
-        st.session_state.lang = "zh"
+    # 初始化 session state
     if "result" not in st.session_state:
         st.session_state.result = None
     if "current_report" not in st.session_state:
         st.session_state.current_report = None
     if "report_type" not in st.session_state:
         st.session_state.report_type = "fa"
+    if "analysis_completed" not in st.session_state:
+        st.session_state.analysis_completed = False  # 分析是否完成
     if "analyst_name" not in st.session_state:
         st.session_state.analyst_name = ""
     if "analyst_title" not in st.session_state:
@@ -1938,28 +2048,9 @@ def main():
     if "uploaded_images" not in st.session_state:
         st.session_state.uploaded_images = []
     
-    # 右上角语言切换和齿轮
-    col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
-    with col3:
-        if st.button(get_text("lang_zh"), key="zh_btn"):
-            st.session_state.lang = "zh"
-            st.rerun()
-    with col4:
-        if st.button(get_text("lang_en"), key="en_btn"):
-            st.session_state.lang = "en"
-            st.rerun()
-    with col5:
-        if st.button("⚙️", key="settings_btn"):
-            admin_settings_dialog()
+    # ==================== 侧边栏（显示用户信息和剩余次数）====================
+    render_sidebar_user_info()
     
-    st.title(get_text("app_title"))
-    st.caption(get_text("app_subtitle"))
-    
-    if not DEEPSEEK_API_KEY:
-        st.error(get_text("api_error"))
-        return
-    
-    # 侧边栏
     with st.sidebar:
         st.markdown(f"### {get_text('sidebar_about')}")
         st.markdown(get_text("sidebar_principle"))
@@ -1984,7 +2075,45 @@ def main():
         st.markdown(f"### {get_text('contact')}")
         st.markdown(get_text("contact_email"))
     
-    # 主表单 - 上下布局
+    # 右上角语言切换和齿轮
+    col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
+    with col3:
+        if st.button(get_text("lang_zh"), key="zh_btn"):
+            st.session_state.lang = "zh"
+            st.rerun()
+    with col4:
+        if st.button(get_text("lang_en"), key="en_btn"):
+            st.session_state.lang = "en"
+            st.rerun()
+    with col5:
+        if st.button("⚙️", key="settings_btn"):
+            admin_settings_dialog()
+    
+    st.title(get_text("app_title"))
+    st.caption(get_text("app_subtitle"))
+    
+    if not DEEPSEEK_API_KEY:
+        st.error(get_text("api_error"))
+        return
+    
+    # ==================== 检查剩余次数 ====================
+    remaining, tier, expires_at, error = get_user_remaining_trials(st.session_state.user_id)
+    
+    if error:
+        st.error(error)
+        return
+    
+    has_trials = (tier == "pro") or (remaining > 0)
+    
+    if not has_trials:
+        st.error(f"⚠️ {get_text('trials_insufficient')}")
+        # 显示升级提示
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.info("💎 " + get_text("click_to_upgrade") + " - 请联系管理员或返回门户升级")
+        return
+    
+    # ==================== 主表单 ====================
     st.markdown(f"### {get_text('basic_info')}")
     
     product_name = st.text_input(get_text("product_name"), placeholder=get_text("product_name_ph"))
@@ -2050,34 +2179,51 @@ def main():
     
     st.markdown("---")
     
+    # ==================== 分析按钮（扣费）====================
     if st.button(get_text("analyze_btn"), type="primary", use_container_width=True):
         if not product_name or not symptom:
             st.error(get_text("fill_required"))
         else:
-            with st.spinner(get_text("analyzing")):
-                try:
-                    result = run_analysis(
-                        product_name=product_name,
-                        symptom=symptom,
-                        project_name=st.session_state.project_name,
-                        installation=installation,
-                        temperature=temperature,
-                        lang=st.session_state.lang,
-                        timeseries_df=timeseries_df if enable_timeseries else None,
-                        enable_web=enable_web,
-                        enable_rules=enable_rules,
-                        analyst_name=st.session_state.analyst_name,
-                        analyst_title=st.session_state.analyst_title
-                    )
-                    st.session_state.result = result
-                    st.session_state.current_report = None
-                    st.success(get_text("success"))
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"{get_text('error')}: {str(e)}")
+            # 再次检查剩余次数
+            remaining_check, tier_check, _, _ = get_user_remaining_trials(st.session_state.user_id)
+            if tier_check != "pro" and remaining_check <= 0:
+                st.error(get_text("trials_insufficient"))
+            else:
+                # 消耗次数
+                success, new_remaining, error_msg = consume_trial(
+                    st.session_state.user_id, 
+                    "AI-FA", 
+                    "深度故障分析"
+                )
+                
+                if not success:
+                    st.error(error_msg)
+                else:
+                    with st.spinner(get_text("analyzing")):
+                        try:
+                            result = run_analysis(
+                                product_name=product_name,
+                                symptom=symptom,
+                                project_name=st.session_state.project_name,
+                                installation=installation,
+                                temperature=temperature,
+                                lang=st.session_state.lang,
+                                timeseries_df=timeseries_df if enable_timeseries else None,
+                                enable_web=enable_web,
+                                enable_rules=enable_rules,
+                                analyst_name=st.session_state.analyst_name,
+                                analyst_title=st.session_state.analyst_title
+                            )
+                            st.session_state.result = result
+                            st.session_state.current_report = None
+                            st.session_state.analysis_completed = True
+                            st.success(get_text("success"))
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"{get_text('error')}: {str(e)}")
     
-    # 显示结果
-    if st.session_state.result:
+    # ==================== 显示结果 ====================
+    if st.session_state.result and st.session_state.analysis_completed:
         result = st.session_state.result
         lang = st.session_state.lang
         stage_name = get_stage_name(result.failure_stage, lang)
@@ -2131,26 +2277,60 @@ def main():
         else:
             st.success(remove_bold_markers(result.root_cause_en))
         
+        # ==================== 报告生成按钮（各自扣费）====================
         col_btn1, col_btn2, col_btn3 = st.columns(3)
+        
         with col_btn1:
+            # FA 报告按钮
             if st.button(get_text("generate_fa_btn"), use_container_width=True):
-                report = generate_fa_report(result, lang)
-                st.session_state.current_report = report
-                st.session_state.report_type = "FA"
-                st.rerun()
+                # 检查剩余次数
+                remaining_check, tier_check, _, _ = get_user_remaining_trials(st.session_state.user_id)
+                if tier_check != "pro" and remaining_check <= 0:
+                    st.error(get_text("trials_insufficient"))
+                else:
+                    # 消耗次数
+                    success, new_remaining, error_msg = consume_trial(
+                        st.session_state.user_id, 
+                        "AI-FA", 
+                        "生成FA报告"
+                    )
+                    if not success:
+                        st.error(error_msg)
+                    else:
+                        report = generate_fa_report(result, lang)
+                        st.session_state.current_report = report
+                        st.session_state.report_type = "FA"
+                        st.rerun()
+        
         with col_btn2:
+            # 8D 报告按钮
             if st.button(get_text("generate_8d_btn"), use_container_width=True):
-                report = generate_8d_report(result, lang)
-                st.session_state.current_report = report
-                st.session_state.report_type = "8D"
-                st.rerun()
+                remaining_check, tier_check, _, _ = get_user_remaining_trials(st.session_state.user_id)
+                if tier_check != "pro" and remaining_check <= 0:
+                    st.error(get_text("trials_insufficient"))
+                else:
+                    success, new_remaining, error_msg = consume_trial(
+                        st.session_state.user_id, 
+                        "AI-FA", 
+                        "生成8D报告"
+                    )
+                    if not success:
+                        st.error(error_msg)
+                    else:
+                        report = generate_8d_report(result, lang)
+                        st.session_state.current_report = report
+                        st.session_state.report_type = "8D"
+                        st.rerun()
+        
         with col_btn3:
+            # 清除结果按钮（不扣费）
             if st.button(get_text("clear_btn"), use_container_width=True):
                 st.session_state.result = None
                 st.session_state.current_report = None
+                st.session_state.analysis_completed = False
                 st.rerun()
     
-    # 显示报告
+    # ==================== 显示报告预览 ====================
     if st.session_state.current_report and st.session_state.result:
         st.markdown("---")
         st.markdown(f"### {get_text('report_preview')}")
