@@ -75,6 +75,15 @@ st.set_page_config(
 
 query_params = st.query_params
 
+
+def set_app_language(lang: str):
+    """同步 session 与 URL 语言，避免 query_params 在 rerun 时覆盖用户选择。"""
+    if lang not in ("zh", "en"):
+        lang = "zh"
+    st.session_state.lang = lang
+    st.query_params["lang"] = lang
+
+
 if "user_id" in query_params:
     # 获取 user_id
     user_id_val = query_params["user_id"]
@@ -96,14 +105,15 @@ if "user_id" in query_params:
     else:
         st.session_state.username = "User"
     
-    # 设置语言
-    if "lang" in query_params:
-        lang_val = query_params["lang"]
-        if isinstance(lang_val, list):
-            lang_val = lang_val[0]
-        st.session_state.lang = lang_val if lang_val in ["zh", "en"] else "zh"
-    else:
-        st.session_state.lang = "zh"
+    # 设置语言（仅首次进入时从 URL 读取）
+    if "lang" not in st.session_state:
+        if "lang" in query_params:
+            lang_val = query_params["lang"]
+            if isinstance(lang_val, list):
+                lang_val = lang_val[0]
+            set_app_language(lang_val if lang_val in ["zh", "en"] else "zh")
+        else:
+            set_app_language("zh")
     
     # 接收剩余次数（仅用于初始显示）
     if "trials_left" in query_params:
@@ -2115,11 +2125,11 @@ def main():
     col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
     with col3:
         if st.button(get_text("lang_zh"), key="zh_btn"):
-            st.session_state.lang = "zh"
+            set_app_language("zh")
             st.rerun()
     with col4:
         if st.button(get_text("lang_en"), key="en_btn"):
-            st.session_state.lang = "en"
+            set_app_language("en")
             st.rerun()
     with col5:
         if st.button("⚙️", key="settings_btn"):
