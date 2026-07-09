@@ -13,12 +13,14 @@ AI-powered Failure Analysis & 8D Report Generation
 """
 
 import streamlit as st
+import os
 import pandas as pd
 import numpy as np
 import json
 import uuid
 import re
-import io
+import textwrap
+from typing import Tuple
 import requests
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -413,6 +415,9 @@ TEXTS = {
         "generate_fa_btn": "生成FA报告",
         "generate_8d_btn": "生成8D报告",
         "download_word": "下载Word报告",
+        "template_label": "报告模板",
+        "template_fill_btn": "📄 生成模板报告",
+        "template_hint": "固定客户模板使用规则自动填表，无需调用 DeepSeek。",
         "clear_btn": "清除结果",
         
         "five_why_title": "5-Why 根因分析",
@@ -593,6 +598,9 @@ TEXTS = {
         "generate_fa_btn": "Generate FA Report",
         "generate_8d_btn": "Generate 8D Report",
         "download_word": "Download Word Report",
+        "template_label": "Report template",
+        "template_fill_btn": "📄 Generate template report",
+        "template_hint": "Fixed client templates are filled by rules; DeepSeek is not required.",
         "clear_btn": "Clear Results",
         
         "five_why_title": "5-Why Root Cause Analysis",
@@ -844,6 +852,7 @@ def web_search_dual(query: str, lang: str) -> str:
 
 from knowledge_base_utils import SupabaseKnowledgeDB
 from web_search_utils import web_search_dual as shared_web_search_dual
+from dfss_report_templates import export_report_template, list_report_templates
 
 
 def create_supabase_knowledge_db() -> SupabaseKnowledgeDB:
@@ -1000,41 +1009,106 @@ def _fishbone_mpl_font(word_pt: float) -> float:
     return word_pt * FISHBONE_EXPORT_WIDTH_IN / FISHBONE_PAGE_USABLE_IN
 
 
-def _truncate_cause_label(cause: str, lang: str, max_len: int = 16) -> str:
+def _wrap_cause_text(cause: str, lang: str) -> str:
     text = remove_bold_markers(cause)
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
+    if not text:
+        return ""
+    if lang == "zh":
+        line_width = 11
+        lines = [text[i : i + line_width] for i in range(0, len(text), line_width)]
+        return "\n".join(lines[:3])
+    return textwrap.fill(text, width=24)[:90]
 
 
-def _draw_rib_causes(ax, x0: float, y0: float, x1: float, y1: float, causes: List[str], lang: str) -> None:
-    """沿单根大骨方向分布子原因，避免全部挤在同一 y 带。"""
+def _text_bbox_data(
+    ax,
+    x: float,
+    y: float,
+    text: str,
+    fontsize: float,
+    ha: str = "left",
+    va: str = "center",
+    linespacing: float = 1.12,
+) -> Tuple[float, float, float, float]:
+    fig = ax.figure
+    fig.canvas.draw()
+    txt = ax.text(
+        x,
+        y,
+        text,
+        fontsize=fontsize,
+        ha=ha,
+        va=va,
+        linespacing=linespacing,
+        alpha=0,
+    )
+    renderer = fig.canvas.get_renderer()
+    bb = txt.get_window_extent(renderer=renderer)
+    txt.remove()
+    x0, y0 = ax.transData.inverted().transform((bb.x0, bb.y0))
+    x1, y1 = ax.transData.inverted().transform((bb.x1, bb.y1))
+    return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+
+
+def _boxes_overlap(box_a: Tuple[float, float, float, float], box_b: Tuple[float, float, float, float], pad: float = 0.2) -> bool:
+    return not (
+        box_a[2] + pad < box_b[0]
+        or box_b[2] + pad < box_a[0]
+        or box_a[3] + pad < box_b[1]
+        or box_b[3] + pad < box_a[1]
+    )
+
+
+def _draw_rib_causes(
+    ax,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    causes: List[str],
+    lang: str,
+    placed_boxes: List[Tuple[float, float, float, float]],
+) -> None:
+    """沿大骨分布子原因：自动换行 + 碰撞避让。"""
     if not causes:
         return
 
     dx, dy = x1 - x0, y1 - y0
-    count = min(len(causes), 4)
+    count = min(len(causes), 3)
     cause_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT)
-    branch_len = 1.55 if lang == "zh" else 1.75
 
     for idx in range(count):
-        t = 0.28 + idx * (0.58 / max(count - 1, 1))
+        wrapped = _wrap_cause_text(causes[idx], lang)
+        if not wrapped:
+            continue
+
+        t = 0.22 + idx * (0.56 / max(count - 1, 1))
         px = x0 + dx * t
         py = y0 + dy * t
         branch_dir = -1 if idx % 2 == 0 else 1
-        bx = px + branch_dir * branch_len
-        by = py + branch_dir * 0.18
-        cause_text = _truncate_cause_label(causes[idx], lang)
-        ax.plot([px, bx], [py, by], "k:", linewidth=1.1, alpha=0.75)
         ha = "right" if branch_dir < 0 else "left"
+        bx = px + branch_dir * 1.35
+        by = py + branch_dir * 0.12
+
+        for attempt in range(14):
+            bbox = _text_bbox_data(ax, bx, by, wrapped, cause_fontsize, ha=ha, va="center")
+            if not any(_boxes_overlap(bbox, existing) for existing in placed_boxes):
+                break
+            by += 0.45 * (1 if branch_dir > 0 else -1)
+            if attempt % 2 == 1:
+                bx += branch_dir * 0.3
+
+        ax.plot([px, bx], [py, by], "k:", linewidth=1.0, alpha=0.72)
         ax.text(
-            bx + (0.05 if branch_dir > 0 else -0.05),
+            bx + (0.04 if branch_dir > 0 else -0.04),
             by,
-            cause_text,
+            wrapped,
             fontsize=cause_fontsize,
             ha=ha,
             va="center",
+            linespacing=1.12,
         )
+        placed_boxes.append(_text_bbox_data(ax, bx, by, wrapped, cause_fontsize, ha=ha, va="center"))
 
 
 def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes:
@@ -1091,6 +1165,7 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
 
     rib_dx = 2.6
     rib_dy = 3.6
+    placed_boxes: List[Tuple[float, float, float, float]] = []
 
     for cat_key, causes, anchor_x, is_top in categories_data:
         display_name = cat_names_zh.get(cat_key, cat_key) if lang == "zh" else cat_key
@@ -1098,16 +1173,29 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
         end_y = main_y + rib_dy if is_top else main_y - rib_dy
 
         ax.plot([anchor_x, end_x], [main_y, end_y], "k-", linewidth=2.2)
+        cat_x = end_x - 0.1
+        cat_y = end_y + (0.25 if is_top else -0.25)
+        cat_va = "bottom" if is_top else "top"
+        for attempt in range(8):
+            cat_bbox = _text_bbox_data(
+                ax, cat_x, cat_y, display_name, category_fontsize, ha="right", va=cat_va
+            )
+            if not any(_boxes_overlap(cat_bbox, existing) for existing in placed_boxes):
+                break
+            cat_y += 0.35 if is_top else -0.35
         ax.text(
-            end_x - 0.1,
-            end_y + (0.25 if is_top else -0.25),
+            cat_x,
+            cat_y,
             display_name,
             fontsize=category_fontsize,
             ha="right",
-            va="bottom" if is_top else "top",
+            va=cat_va,
             fontweight="bold",
         )
-        _draw_rib_causes(ax, anchor_x, main_y, end_x, end_y, causes, lang)
+        placed_boxes.append(
+            _text_bbox_data(ax, cat_x, cat_y, display_name, category_fontsize, ha="right", va=cat_va)
+        )
+        _draw_rib_causes(ax, anchor_x, main_y, end_x, end_y, causes, lang, placed_boxes)
 
     ax.text(7.6, 11.5, remove_bold_markers(get_text("fishbone_title")), fontsize=title_fontsize, ha="center", fontweight="bold")
 
@@ -2279,12 +2367,51 @@ def main():
             lang
         )
         
-        st.download_button(
-            label=get_text("download_word"),
-            data=word_buffer,
-            file_name=filename,
-            use_container_width=True
-        )
+        col_word, col_template = st.columns(2)
+
+        with col_word:
+            st.download_button(
+                label=get_text("download_word"),
+                data=word_buffer,
+                file_name=filename,
+                use_container_width=True,
+                key="download_word_report",
+            )
+
+        with col_template:
+            templates = list_report_templates("AI-FA")
+            if templates:
+                selected_template = st.selectbox(get_text("template_label"), templates, key="fa_template_select")
+                st.caption(get_text("template_hint"))
+                if st.button(get_text("template_fill_btn"), use_container_width=True, key="fa_template_fill_btn"):
+                    try:
+                        template_bytes, template_mime = export_report_template(
+                            template_filename=selected_template,
+                            result=result,
+                            lang=lang,
+                            analyst_name=st.session_state.get("analyst_name", ""),
+                        )
+                        ext = os.path.splitext(selected_template)[1]
+                        st.session_state.fa_template_download = {
+                            "data": template_bytes.getvalue(),
+                            "name": f"{result.product_name}_{title_summary}_模板_{datetime.now().strftime('%Y%m%d')}{ext}",
+                            "mime": template_mime,
+                        }
+                    except Exception as exc:
+                        st.error(f"模板导出失败: {exc}" if lang == "zh" else f"Template export failed: {exc}")
+
+                if st.session_state.get("fa_template_download"):
+                    payload = st.session_state.fa_template_download
+                    st.download_button(
+                        label="📥 确认下载模板报告" if lang == "zh" else "📥 Confirm template download",
+                        data=payload["data"],
+                        file_name=re.sub(r'[\\/*?:"<>|]', '', payload["name"]),
+                        mime=payload["mime"],
+                        use_container_width=True,
+                        key="download_template_report",
+                    )
+            else:
+                st.info("未找到报告模板，请将模板放入 templates/ 目录。" if lang == "zh" else "No report templates found in templates/.")
 
 
 if __name__ == "__main__":
