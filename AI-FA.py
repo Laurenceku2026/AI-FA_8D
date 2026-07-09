@@ -14,6 +14,7 @@ AI-powered Failure Analysis & 8D Report Generation
 
 import streamlit as st
 import os
+import io
 import pandas as pd
 import numpy as np
 import json
