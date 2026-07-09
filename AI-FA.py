@@ -988,55 +988,105 @@ def setup_chinese_font():
         return False
 
 
+def _truncate_cause_label(cause: str, lang: str, max_len: int = 22) -> str:
+    text = remove_bold_markers(cause)
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def _draw_rib_causes(ax, x0: float, y0: float, x1: float, y1: float, causes: List[str], lang: str) -> None:
+    """沿单根大骨方向分布子原因，避免全部挤在同一 y 带。"""
+    if not causes:
+        return
+
+    dx, dy = x1 - x0, y1 - y0
+    count = min(len(causes), 4)
+    # 子原因沿大骨长度方向铺开，并交替向左右伸出短枝。
+    for idx in range(count):
+        t = 0.28 + idx * (0.58 / max(count - 1, 1))
+        px = x0 + dx * t
+        py = y0 + dy * t
+        branch_dir = -1 if idx % 2 == 0 else 1
+        branch_len = 1.0 if lang == "zh" else 1.2
+        bx = px + branch_dir * branch_len
+        by = py + branch_dir * 0.15
+        cause_text = _truncate_cause_label(causes[idx], lang)
+        ax.plot([px, bx], [py, by], "k:", linewidth=0.8, alpha=0.65)
+        ha = "right" if branch_dir < 0 else "left"
+        ax.text(bx + (0.05 if branch_dir > 0 else -0.05), by, cause_text, fontsize=8, ha=ha, va="center")
+
+
 def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes:
     """生成鱼骨图图片（支持双语）"""
     setup_chinese_font()
-    
-    fig, ax = plt.subplots(figsize=(16, 10))
-    ax.set_xlim(0, 16)
+
+    fig, ax = plt.subplots(figsize=(18, 10))
+    ax.set_xlim(0, 18)
     ax.set_ylim(0, 12)
-    ax.axis('off')
-    
+    ax.axis("off")
+
+    main_y = 6.0
+    main_x_start = 1.0
+    main_x_end = 15.8
+
     # 主骨
-    ax.plot([2, 14], [6, 6], 'k-', linewidth=3)
-    
-    # 箭头
-    ax.annotate('', xy=(14, 6), xytext=(13.2, 6),
-                arrowprops=dict(arrowstyle='->', lw=3, color='black'))
-    
-    # 鱼头标签
-    ax.text(14.5, 6, get_text("symptom")[:25] if lang == "zh" else "Failure", 
-            fontsize=12, va='center', fontweight='bold')
-    
-    cat_names_zh = {"Man": "人", "Machine": "机", "Material": "料",
-                    "Method": "法", "Environment": "环", "Measurement": "测"}
-    
-    # 获取双语原因数据
+    ax.plot([main_x_start, main_x_end], [main_y, main_y], "k-", linewidth=3)
+    ax.annotate(
+        "",
+        xy=(main_x_end, main_y),
+        xytext=(main_x_end - 0.7, main_y),
+        arrowprops=dict(arrowstyle="->", lw=3, color="black"),
+    )
+    ax.text(
+        main_x_end + 0.35,
+        main_y,
+        get_text("symptom")[:20] if lang == "zh" else "Failure",
+        fontsize=12,
+        va="center",
+        fontweight="bold",
+    )
+
+    cat_names_zh = {
+        "Man": "人",
+        "Machine": "机",
+        "Material": "料",
+        "Method": "法",
+        "Environment": "环",
+        "Measurement": "测",
+    }
+
+    # 六大类沿主骨 x 方向分散布置：上三下三，左右交错，充分利用横向空间。
     categories_data = [
-        ("Man", fishbone.get_causes(lang, "Man"), 4, 9.5),
-        ("Machine", fishbone.get_causes(lang, "Machine"), 4, 8.2),
-        ("Material", fishbone.get_causes(lang, "Material"), 4, 6.9),
-        ("Method", fishbone.get_causes(lang, "Method"), 5, 5.1),
-        ("Environment", fishbone.get_causes(lang, "Environment"), 5, 3.8),
-        ("Measurement", fishbone.get_causes(lang, "Measurement"), 5, 2.5)
+        ("Man", fishbone.get_causes(lang, "Man"), 3.0, True),
+        ("Machine", fishbone.get_causes(lang, "Machine"), 6.5, True),
+        ("Material", fishbone.get_causes(lang, "Material"), 10.0, True),
+        ("Method", fishbone.get_causes(lang, "Method"), 4.8, False),
+        ("Environment", fishbone.get_causes(lang, "Environment"), 8.3, False),
+        ("Measurement", fishbone.get_causes(lang, "Measurement"), 11.8, False),
     ]
-    
-    for cat_key, causes, spine_x, spine_y in categories_data:
+
+    rib_dx = 2.6
+    rib_dy = 3.2
+
+    for cat_key, causes, anchor_x, is_top in categories_data:
         display_name = cat_names_zh.get(cat_key, cat_key) if lang == "zh" else cat_key
-        
-        # 脊骨
-        ax.plot([2.5, spine_x], [6, spine_y], 'k-', linewidth=1.5)
-        ax.text(spine_x - 0.5, spine_y, display_name, fontsize=11,
-                ha='right', va='center', fontweight='bold')
-        
-        # 原因分支
-        for j, cause in enumerate(causes[:4]):
-            cause_text = remove_bold_markers(cause[:25] + "…" if len(cause) > 25 else cause)
-            y_offset = spine_y + 0.6 + j * 0.45 if j % 2 == 0 else spine_y - 0.6 - (j-1) * 0.45
-            ax.plot([spine_x, spine_x + 0.8], [spine_y, y_offset], 'k:', linewidth=0.8, alpha=0.6)
-            ax.text(spine_x + 0.9, y_offset, cause_text, fontsize=8, va='center')
-    
-    ax.text(8, 11.2, remove_bold_markers(get_text("fishbone_title")), fontsize=16, ha='center', fontweight='bold')
+        end_x = anchor_x - rib_dx
+        end_y = main_y + rib_dy if is_top else main_y - rib_dy
+
+        ax.plot([anchor_x, end_x], [main_y, end_y], "k-", linewidth=1.6)
+        ax.text(
+            end_x - 0.15,
+            end_y + (0.25 if is_top else -0.25),
+            display_name,
+            fontsize=11,
+            ha="right",
+            va="bottom" if is_top else "top",
+            fontweight="bold",
+        )
+        _draw_rib_causes(ax, anchor_x, main_y, end_x, end_y, causes, lang)
+
+    ax.text(9, 11.2, remove_bold_markers(get_text("fishbone_title")), fontsize=16, ha="center", fontweight="bold")
     
     plt.tight_layout()
     
