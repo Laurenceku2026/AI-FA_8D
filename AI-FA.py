@@ -832,222 +832,28 @@ def safe_json_parse(response: str, default_value: dict = None) -> dict:
 # ==================== 联网搜索（双语双向，中文优先）====================
 
 def web_search_dual(query: str, lang: str) -> str:
-    """双语双向联网搜索（中文优先，英文补充）"""
-    results = []
-    
-    try:
-        from duckduckgo_search import DDGS
-        ddgs = DDGS()
-    except ImportError:
-        return "（联网搜索功能需要安装 duckduckgo-search）"
-    
-    # 1. 优先中文搜索
-    if lang == "zh" or is_chinese(query):
-        try:
-            chinese_results = list(ddgs.text(query, max_results=3))
-            for r in chinese_results:
-                results.append({
-                    "title": r.get('title', ''),
-                    "snippet": r.get('body', '')[:300],
-                    "source": "chinese"
-                })
-        except:
-            pass
-    
-    # 2. 英文搜索作为补充
-    if is_chinese(query):
-        en_query = translate_to_en(query)
-    else:
-        en_query = query
-    
-    try:
-        english_results = list(ddgs.text(en_query, max_results=3))
-        for r in english_results:
-            title = r.get('title', '')
-            if not any(title == existing['title'] for existing in results):
-                results.append({
-                    "title": title,
-                    "snippet": r.get('body', '')[:300],
-                    "source": "english"
-                })
-    except:
-        pass
-    
-    if not results:
-        return "（未找到相关结果）"
-    
-    formatted = []
-    for r in results[:5]:
-        formatted.append(f"- {r['title']}: {r['snippet']}")
-    
-    return "联网搜索结果：\n" + "\n".join(formatted)
+    """调用共享双语双向联网检索模块。"""
+    return shared_web_search_dual(
+        query=query,
+        lang=lang,
+        translate_to_en=translate_to_en,
+        max_results_each=3,
+        max_output=5,
+    )
 
 
-# ==================== Supabase 知识库 ====================
+from knowledge_base_utils import SupabaseKnowledgeDB
+from web_search_utils import web_search_dual as shared_web_search_dual
 
-class SupabaseKnowledgeDB:
-    """Supabase 知识库管理（双语）"""
-    
-    def __init__(self):
-        self.categories = ["光学", "机械", "材料", "热学", "电气", "控制"]
-        self.headers = {
-            "apikey": SUPABASE_SERVICE_ROLE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            "Content-Type": "application/json"
-        }
-        self._load_cache()
-    
-    def _load_cache(self):
-        """加载知识库到缓存"""
-        self.knowledge_zh = {cat: [] for cat in self.categories}
-        self.knowledge_en = {cat: [] for cat in self.categories}
-        
-        if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-            return
-        
-        try:
-            response = requests.get(
-                f"{SUPABASE_URL}/rest/v1/knowledge_base?order=id",
-                headers=self.headers,
-                timeout=10
-            )
-            if response.status_code == 200:
-                rows = response.json()
-                for row in rows:
-                    cat = row.get("category")
-                    if cat in self.knowledge_zh:
-                        if row.get("content"):
-                            self.knowledge_zh[cat].append(row.get("content"))
-                        if row.get("content_en"):
-                            self.knowledge_en[cat].append(row.get("content_en"))
-        except Exception as e:
-            print(f"加载知识库失败: {e}")
-    
-    def get_knowledge(self, category: str, lang: str = "zh") -> List[str]:
-        """获取指定分类的知识条目"""
-        if lang == "zh":
-            return self.knowledge_zh.get(category, [])
-        else:
-            return self.knowledge_en.get(category, [])
-    
-    def search_knowledge_dual(self, query: str, lang: str) -> List[str]:
-        """双语搜索知识库（中文优先，英文补充）"""
-        results = []
-        
-        # 1. 原始语言搜索
-        for cat in self.categories:
-            items = self.get_knowledge(cat, lang)
-            for item in items:
-                if query.lower() in item.lower():
-                    if item not in results:
-                        results.append(item)
-        
-        # 2. 翻译后搜索（补充）
-        other_lang = "en" if lang == "zh" else "zh"
-        trans_query = translate_to_en(query) if lang == "zh" else translate_to_zh(query)
-        for cat in self.categories:
-            items = self.get_knowledge(cat, other_lang)
-            for item in items:
-                if trans_query.lower() in item.lower():
-                    if item not in results:
-                        results.append(item)
-        
-        return results[:10]
-    
-    def add_knowledge(self, category: str, content: str) -> bool:
-        """添加知识条目"""
-        lang = st.session_state.get("lang", "zh")
-        
-        if lang == "zh":
-            zh_text = content
-            en_text = translate_to_en(content)
-        else:
-            en_text = content
-            zh_text = translate_to_zh(content)
-        
-        try:
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/knowledge_base",
-                headers=self.headers,
-                json={
-                    "category": category,
-                    "content": zh_text,
-                    "content_en": en_text,
-                    "created_at": datetime.now().isoformat()
-                },
-                timeout=10
-            )
-            if response.status_code in [200, 201, 204]:
-                self._load_cache()
-                return True
-        except:
-            pass
-        return False
-    
-    def delete_knowledge(self, category: str, content: str) -> bool:
-        """删除知识条目"""
-        lang = st.session_state.get("lang", "zh")
-        
-        try:
-            if lang == "zh":
-                response = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/knowledge_base?category=eq.{category}&content=eq.{content}",
-                    headers=self.headers
-                )
-            else:
-                response = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/knowledge_base?category=eq.{category}&content_en=eq.{content}",
-                    headers=self.headers
-                )
-            
-            if response.status_code == 200 and response.json():
-                record_id = response.json()[0]["id"]
-                delete_resp = requests.delete(
-                    f"{SUPABASE_URL}/rest/v1/knowledge_base?id=eq.{record_id}",
-                    headers=self.headers
-                )
-                if delete_resp.status_code in [200, 204]:
-                    self._load_cache()
-                    return True
-        except:
-            pass
-        return False
-    
-    def clear_category(self, category: str) -> bool:
-        """清空分类"""
-        try:
-            response = requests.delete(
-                f"{SUPABASE_URL}/rest/v1/knowledge_base?category=eq.{category}",
-                headers=self.headers
-            )
-            if response.status_code in [200, 204]:
-                self._load_cache()
-                return True
-        except:
-            pass
-        return False
-    
-    def export_to_dataframe(self) -> pd.DataFrame:
-        """导出知识库"""
-        max_len = max((len(self.knowledge_zh.get(cat, [])) for cat in self.categories), default=0)
-        export_data = {}
-        for cat in self.categories:
-            items = self.knowledge_zh.get(cat, [])
-            export_data[cat] = items + [''] * (max_len - len(items))
-        return pd.DataFrame(export_data)
-    
-    def import_from_dataframe(self, df: pd.DataFrame) -> int:
-        """从DataFrame导入"""
-        total = 0
-        for cat in self.categories:
-            if cat in df.columns:
-                self.clear_category(cat)
-                for item in df[cat].dropna():
-                    if str(item).strip():
-                        if self.add_knowledge(cat, str(item).strip()):
-                            total += 1
-        self._load_cache()
-        return total
+
+def create_supabase_knowledge_db() -> SupabaseKnowledgeDB:
+    return SupabaseKnowledgeDB(
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_KEY,
+        translate_to_en=translate_to_en,
+        translate_to_zh=translate_to_zh,
+        ui_lang_getter=lambda: st.session_state.get("lang", "zh"),
+    )
 
 
 # ==================== 管理员弹窗 ====================
@@ -1096,7 +902,7 @@ def admin_settings_dialog():
     st.subheader(get_text("knowledge_base_title"))
     
     if "knowledge_db" not in st.session_state:
-        st.session_state.knowledge_db = SupabaseKnowledgeDB()
+        st.session_state.knowledge_db = create_supabase_knowledge_db()
     
     kb = st.session_state.knowledge_db
     categories = kb.categories
@@ -1959,13 +1765,14 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     # 2. 双语检索（中文优先，英文补充）
     context_parts = []
     
-    kb = SupabaseKnowledgeDB()
+    kb = create_supabase_knowledge_db()
+    kb_all = kb.search_knowledge_full(symptom, limit=10)
+    kb_results_zh = [r for r in kb_all if is_chinese(r)]
+    kb_results_en = [r for r in kb_all if r not in kb_results_zh]
     
-    kb_results_zh = kb.search_knowledge_dual(symptom, "zh")
     if kb_results_zh:
         context_parts.append("【中文知识库案例】\n" + "\n".join(f"- {remove_bold_markers(r[:200])}" for r in kb_results_zh[:5]))
     
-    kb_results_en = kb.search_knowledge_dual(symptom_en, "en")
     if kb_results_en:
         context_parts.append("【English Knowledge Base】\n" + "\n".join(f"- {remove_bold_markers(r[:200])}" for r in kb_results_en[:5]))
     
