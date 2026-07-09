@@ -988,7 +988,19 @@ def setup_chinese_font():
         return False
 
 
-def _truncate_cause_label(cause: str, lang: str, max_len: int = 20) -> str:
+# Word 正文默认约 11pt；鱼骨图插入页宽后会整体缩放，需反算 matplotlib 字号。
+FISHBONE_WORD_BODY_PT = 11
+FISHBONE_WORD_HEADING_PT = 16
+FISHBONE_EXPORT_WIDTH_IN = 13.5
+FISHBONE_PAGE_USABLE_IN = 6.5
+
+
+def _fishbone_mpl_font(word_pt: float) -> float:
+    """将 Word 目标字号换算为导出图片中的 matplotlib 字号。"""
+    return word_pt * FISHBONE_EXPORT_WIDTH_IN / FISHBONE_PAGE_USABLE_IN
+
+
+def _truncate_cause_label(cause: str, lang: str, max_len: int = 16) -> str:
     text = remove_bold_markers(cause)
     if len(text) <= max_len:
         return text
@@ -1002,8 +1014,8 @@ def _draw_rib_causes(ax, x0: float, y0: float, x1: float, y1: float, causes: Lis
 
     dx, dy = x1 - x0, y1 - y0
     count = min(len(causes), 4)
-    cause_fontsize = 10 if lang == "zh" else 9
-    branch_len = 1.15 if lang == "zh" else 1.35
+    cause_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT)
+    branch_len = 1.55 if lang == "zh" else 1.75
 
     for idx in range(count):
         t = 0.28 + idx * (0.58 / max(count - 1, 1))
@@ -1011,9 +1023,9 @@ def _draw_rib_causes(ax, x0: float, y0: float, x1: float, y1: float, causes: Lis
         py = y0 + dy * t
         branch_dir = -1 if idx % 2 == 0 else 1
         bx = px + branch_dir * branch_len
-        by = py + branch_dir * 0.12
+        by = py + branch_dir * 0.18
         cause_text = _truncate_cause_label(causes[idx], lang)
-        ax.plot([px, bx], [py, by], "k:", linewidth=0.9, alpha=0.7)
+        ax.plot([px, bx], [py, by], "k:", linewidth=1.1, alpha=0.75)
         ha = "right" if branch_dir < 0 else "left"
         ax.text(
             bx + (0.05 if branch_dir > 0 else -0.05),
@@ -1029,17 +1041,20 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
     """生成鱼骨图图片（支持双语）"""
     setup_chinese_font()
 
-    fig, ax = plt.subplots(figsize=(14, 9))
-    ax.set_xlim(0, 14.2)
-    ax.set_ylim(0, 11)
+    fig, ax = plt.subplots(figsize=(16, 12))
+    ax.set_xlim(0, 15.2)
+    ax.set_ylim(0, 12.5)
     ax.axis("off")
 
-    main_y = 5.5
+    main_y = 6.2
     main_x_start = 0.8
-    main_x_end = 12.6
+    main_x_end = 13.4
+    category_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT + 1)
+    fish_head_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT + 2)
+    title_fontsize = _fishbone_mpl_font(FISHBONE_WORD_HEADING_PT)
 
     # 主骨
-    ax.plot([main_x_start, main_x_end], [main_y, main_y], "k-", linewidth=3)
+    ax.plot([main_x_start, main_x_end], [main_y, main_y], "k-", linewidth=3.5)
     ax.annotate(
         "",
         xy=(main_x_end, main_y),
@@ -1050,7 +1065,7 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
         main_x_end + 0.15,
         main_y,
         get_text("symptom")[:18] if lang == "zh" else "Failure",
-        fontsize=14,
+        fontsize=fish_head_fontsize,
         va="center",
         fontweight="bold",
     )
@@ -1066,27 +1081,26 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
 
     # 六大类沿主骨分散，鱼头左移后把肋骨尽量铺满主骨长度。
     categories_data = [
-        ("Man", fishbone.get_causes(lang, "Man"), 2.8, True),
-        ("Machine", fishbone.get_causes(lang, "Machine"), 5.8, True),
-        ("Material", fishbone.get_causes(lang, "Material"), 8.8, True),
-        ("Method", fishbone.get_causes(lang, "Method"), 4.2, False),
-        ("Environment", fishbone.get_causes(lang, "Environment"), 7.2, False),
-        ("Measurement", fishbone.get_causes(lang, "Measurement"), 10.2, False),
+        ("Man", fishbone.get_causes(lang, "Man"), 3.0, True),
+        ("Machine", fishbone.get_causes(lang, "Machine"), 6.2, True),
+        ("Material", fishbone.get_causes(lang, "Material"), 9.4, True),
+        ("Method", fishbone.get_causes(lang, "Method"), 4.6, False),
+        ("Environment", fishbone.get_causes(lang, "Environment"), 7.8, False),
+        ("Measurement", fishbone.get_causes(lang, "Measurement"), 11.0, False),
     ]
 
-    rib_dx = 2.4
-    rib_dy = 3.0
-    category_fontsize = 13
+    rib_dx = 2.6
+    rib_dy = 3.6
 
     for cat_key, causes, anchor_x, is_top in categories_data:
         display_name = cat_names_zh.get(cat_key, cat_key) if lang == "zh" else cat_key
         end_x = anchor_x - rib_dx
         end_y = main_y + rib_dy if is_top else main_y - rib_dy
 
-        ax.plot([anchor_x, end_x], [main_y, end_y], "k-", linewidth=1.8)
+        ax.plot([anchor_x, end_x], [main_y, end_y], "k-", linewidth=2.2)
         ax.text(
             end_x - 0.1,
-            end_y + (0.2 if is_top else -0.2),
+            end_y + (0.25 if is_top else -0.25),
             display_name,
             fontsize=category_fontsize,
             ha="right",
@@ -1095,12 +1109,12 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
         )
         _draw_rib_causes(ax, anchor_x, main_y, end_x, end_y, causes, lang)
 
-    ax.text(7.1, 10.3, remove_bold_markers(get_text("fishbone_title")), fontsize=18, ha="center", fontweight="bold")
+    ax.text(7.6, 11.5, remove_bold_markers(get_text("fishbone_title")), fontsize=title_fontsize, ha="center", fontweight="bold")
 
-    plt.tight_layout(pad=0.3)
+    plt.tight_layout(pad=0.4)
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", pad_inches=0.15, facecolor="white")
+    plt.savefig(buf, format="png", dpi=200, bbox_inches="tight", pad_inches=0.2, facecolor="white")
     buf.seek(0)
     plt.close()
     
