@@ -865,12 +865,10 @@ def web_search_dual(query: str, lang: str) -> str:
 
 from knowledge_base_utils import SupabaseKnowledgeDB
 from web_search_utils import web_search_dual as shared_web_search_dual
-from dfss_report_templates import (
+from dfss_report_templates import export_report_template
+from fa_template_profiles import (
     DEFAULT_8D_TEMPLATE_FILENAME,
     TEMPLATE1_8D_FILENAME,
-    export_report_template,
-)
-from fa_template_profiles import (
     TEMPLATE_MODE_CUSTOM,
     TEMPLATE_MODE_DEFAULT,
     TEMPLATE_MODE_TEMPLATE1,
