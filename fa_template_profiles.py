@@ -7,8 +7,8 @@ from typing import Any, Dict, Optional
 MODULE_VERSION = "20260710"
 
 # Plain filenames — no filesystem access at import time (Cloud-safe).
-DEFAULT_8D_TEMPLATE_FILENAME = "默认-8D报告.xls"
-TEMPLATE1_8D_FILENAME = "模板1-8D报告.xls"
+DEFAULT_8D_TEMPLATE_FILENAME = "默认-8D报告.xlsx"
+TEMPLATE1_8D_FILENAME = "模板1-8D报告.xlsx"
 EIGHT_D_TEMPLATE_FILENAME = DEFAULT_8D_TEMPLATE_FILENAME  # legacy alias
 
 TEMPLATE_PROFILES: Dict[str, Dict[str, Any]] = {

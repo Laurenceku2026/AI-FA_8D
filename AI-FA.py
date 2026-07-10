@@ -423,7 +423,7 @@ TEXTS = {
         "template_default_option": "默认 8D 模板",
         "template1_option": "模板-1",
         "template_custom_option": "上传自定义模板",
-        "template_custom_upload": "上传 8D Excel 模板（.xls / .xlsx）",
+        "template_custom_upload": "上传 8D Excel 模板（推荐 .xlsx）",
         "template_select_hint": "默认使用内置 8D 模板；可选模板-1 或上传客户自定义模板。",
         "clear_btn": "清除结果",
         
@@ -612,7 +612,7 @@ TEXTS = {
         "template_default_option": "Default 8D template",
         "template1_option": "Template-1",
         "template_custom_option": "Upload custom template",
-        "template_custom_upload": "Upload 8D Excel template (.xls / .xlsx)",
+        "template_custom_upload": "Upload 8D Excel template (.xlsx recommended)",
         "template_select_hint": "Uses the built-in 8D template by default; choose Template-1 or upload a custom file.",
         "clear_btn": "Clear Results",
         
@@ -2448,7 +2448,7 @@ def main():
         with col_template:
             template_mode = st.session_state.get("fa_template_mode", TEMPLATE_MODE_DEFAULT)
             if template_mode == TEMPLATE_MODE_CUSTOM:
-                selected_template = st.session_state.get("fa_custom_template_name", "custom_8d.xls")
+                selected_template = st.session_state.get("fa_custom_template_name", "custom_8d.xlsx")
                 template_caption = (
                     f"当前模板：{get_text('template_custom_option')}（{selected_template}）"
                     if lang == "zh"
@@ -2482,7 +2482,7 @@ def main():
                         if template_mode == TEMPLATE_MODE_CUSTOM
                         else None,
                     )
-                    ext = os.path.splitext(selected_template)[1] or ".xls"
+                    ext = os.path.splitext(selected_template)[1] or ".xlsx"
                     st.session_state.fa_template_download = {
                         "data": template_bytes.getvalue(),
                         "name": f"{result.product_name}_{title_summary}_模板_{datetime.now().strftime('%Y%m%d')}{ext}",

@@ -18,18 +18,18 @@ from fa_template_profiles import (
 
 TEMPLATE_EXTENSIONS = (".xlsx", ".xls", ".docx")
 
-# 8D 内容区（0-based row, row_span）— 与模板合并区域一致
+# openpyxl 1-based 行号 + 参与行高计算的跨行数（与模板合并区一致）
 EIGHT_D_SECTIONS = {
-    "d1": (8, 1),
-    "d2": (11, 1),
-    "d3": (14, 2),
-    "d4": (18, 2),
-    "d5": (22, 1),
-    "d6": (25, 1),
-    "d7": (28, 1),
-    "d8": (31, 1),
+    "d1": (9, 1),
+    "d2": (12, 1),
+    "d3": (15, 2),
+    "d4": (19, 2),
+    "d5": (23, 1),
+    "d6": (26, 1),
+    "d7": (29, 1),
+    "d8": (32, 1),
 }
-EIGHT_D_CONTENT_COLS = (0, 6)  # inclusive col range for merged content cells
+EIGHT_D_CONTENT_COL = 1
 
 
 def _load_xlrd():
@@ -124,15 +124,25 @@ def export_report_template(
 
 def resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
     here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(here, "templates", filename),
-        os.path.join(os.environ.get("DFSS_TEMPLATE_DIR", ""), app_key, filename),
-        os.path.join(
-            r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template",
-            app_key,
-            filename,
-        ),
-    ]
+    names = [filename]
+    if filename.lower().endswith(".xls"):
+        names.insert(0, filename[:-4] + ".xlsx")
+    elif filename.lower().endswith(".xlsx"):
+        names.append(filename[:-5] + ".xls")
+
+    candidates: List[str] = []
+    for name in names:
+        candidates.extend(
+            [
+                os.path.join(here, "templates", name),
+                os.path.join(os.environ.get("DFSS_TEMPLATE_DIR", ""), app_key, name),
+                os.path.join(
+                    r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template",
+                    app_key,
+                    name,
+                ),
+            ]
+        )
     for path in candidates:
         if path and os.path.isfile(path):
             return path
@@ -148,9 +158,17 @@ def resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
         else:
             markers = ["8d"]
         for name in os.listdir(templates_dir):
-            if not name.lower().endswith((".xls", ".xlsx")):
+            lower = name.lower()
+            if not lower.endswith((".xls", ".xlsx")):
                 continue
-            if markers and all(m.lower() in name.lower() or m in name for m in markers):
+            if markers and all(m.lower() in lower or m in name for m in markers):
+                if lower.endswith(".xlsx"):
+                    return os.path.join(templates_dir, name)
+        for name in os.listdir(templates_dir):
+            lower = name.lower()
+            if not lower.endswith((".xls", ".xlsx")):
+                continue
+            if markers and all(m.lower() in lower or m in name for m in markers):
                 return os.path.join(templates_dir, name)
 
     raise FileNotFoundError(f"8D template not found: {filename}")
@@ -351,6 +369,110 @@ def _build_d8_recognition(lang: str) -> str:
     )
 
 
+def _estimate_openpyxl_row_height(text: str, min_height: float = 15.0, chars_per_line: int = 52) -> float:
+    content = str(text or "")
+    line_count = content.count("\n") + 1
+    wrapped = sum(max(1, (len(line) + chars_per_line - 1) // chars_per_line) for line in content.splitlines() or [""])
+    total_lines = max(line_count, wrapped)
+    return min(409.0, max(min_height, 16.0 + total_lines * 13.5))
+
+
+def _top_alignment():
+    from openpyxl.styles import Alignment
+
+    return Alignment(wrap_text=True, vertical="top", horizontal="left")
+
+
+def _set_openpyxl_value(ws, row: int, col: int, value: str) -> None:
+    cell = ws.cell(row=row, column=col)
+    cell.value = value
+    cell.alignment = _top_alignment()
+
+
+def _section_min_height(ws, row: int, row_span: int) -> float:
+    total = 0.0
+    for offset in range(row_span):
+        h = ws.row_dimensions[row + offset].height
+        total += float(h) if h else 15.0
+    return total
+
+
+def _write_openpyxl_section(ws, row: int, row_span: int, text: str) -> None:
+    """Write into merged area top-left only; preserve template borders."""
+    cell = ws.cell(row=row, column=EIGHT_D_CONTENT_COL)
+    cell.value = text
+    cell.alignment = _top_alignment()
+    min_height = _section_min_height(ws, row, row_span)
+    extra = 24.0 if row_span > 1 else 0.0
+    ws.row_dimensions[row].height = _estimate_openpyxl_row_height(text, min_height=min_height + extra)
+
+
+def _fill_8d_openpyxl(ws, result, lang: str, analyst_name: str) -> None:
+    product_name = _clean_text(result.product_name)
+    project_name = _clean_text(result.project_name) or product_name
+    today = datetime.now().strftime("%Y-%m-%d")
+    stage = _stage_name(result.failure_stage, lang)
+
+    interim = result.interim_actions_zh if lang == "zh" else result.interim_actions_en
+    permanent = result.permanent_actions_zh if lang == "zh" else result.permanent_actions_en
+    preventive = result.preventive_actions_zh if lang == "zh" else result.preventive_actions_en
+
+    _set_openpyxl_value(ws, 6, 2, project_name)
+    _set_openpyxl_value(ws, 6, 4, project_name)
+    _set_openpyxl_value(ws, 6, 7, product_name)
+    _set_openpyxl_value(ws, 7, 2, analyst_name or "-")
+    _set_openpyxl_value(ws, 7, 4, stage)
+    _set_openpyxl_value(ws, 7, 7, today)
+
+    sections = {
+        "d1": _build_d1_team(result, analyst_name, lang),
+        "d2": _build_d2_problem(result, lang),
+        "d3": _join_lines(interim, lang),
+        "d4": _build_cause_analysis(result, lang),
+        "d5": _join_lines(permanent, lang),
+        "d6": _build_d6_verification(result, lang),
+        "d7": _join_lines(preventive, lang),
+        "d8": _build_d8_recognition(lang),
+    }
+    for key, content in sections.items():
+        row, row_span = EIGHT_D_SECTIONS[key]
+        _write_openpyxl_section(ws, row, row_span, content)
+
+
+def _fill_8d_xls_legacy(ws, rb, sh, result, lang: str, analyst_name: str) -> None:
+    """Legacy .xls path for custom uploads only."""
+    product_name = _clean_text(result.product_name)
+    project_name = _clean_text(result.project_name) or product_name
+    today = datetime.now().strftime("%Y-%m-%d")
+    stage = _stage_name(result.failure_stage, lang)
+
+    interim = result.interim_actions_zh if lang == "zh" else result.interim_actions_en
+    permanent = result.permanent_actions_zh if lang == "zh" else result.permanent_actions_en
+    preventive = result.preventive_actions_zh if lang == "zh" else result.preventive_actions_en
+
+    legacy_rows = {k: (v[0] - 1, v[1]) for k, v in EIGHT_D_SECTIONS.items()}
+    _write_value_preserve(ws, rb, sh, 5, 1, project_name)
+    _write_value_preserve(ws, rb, sh, 5, 3, project_name)
+    _write_value_preserve(ws, rb, sh, 5, 6, product_name)
+    _write_value_preserve(ws, rb, sh, 6, 1, analyst_name or "-")
+    _write_value_preserve(ws, rb, sh, 6, 3, stage)
+    _write_value_preserve(ws, rb, sh, 6, 6, today)
+
+    sections = {
+        "d1": _build_d1_team(result, analyst_name, lang),
+        "d2": _build_d2_problem(result, lang),
+        "d3": _join_lines(interim, lang),
+        "d4": _build_cause_analysis(result, lang),
+        "d5": _join_lines(permanent, lang),
+        "d6": _build_d6_verification(result, lang),
+        "d7": _join_lines(preventive, lang),
+        "d8": _build_d8_recognition(lang),
+    }
+    for key, content in sections.items():
+        row, row_span = legacy_rows[key]
+        _write_section_cell(ws, rb, sh, row, row_span, content, force_top=True)
+
+
 def _xlwt_border_line(style: int) -> int:
     return {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}.get(style, 1)
 
@@ -402,24 +524,24 @@ def _write_section_cell(
     text: str,
     force_top: bool = True,
 ) -> None:
-    """Write merged section content preserving template borders and top alignment."""
-    col_start, col_end = EIGHT_D_CONTENT_COLS
+    """Legacy .xls: write top-left only (never write_merge) to avoid breaking borders."""
+    col_start = 0
     xf_index = sh.cell(row, col_start).xf_index
     style = _style_from_template_xf(rb, xf_index, force_top=force_top)
-    row_end = row + max(row_span, 1) - 1
-    if row_span > 1:
-        ws.write_merge(row, row_end, col_start, col_end, text, style)
-    else:
-        ws.write(row, col_start, text, style)
+    ws.write(row, col_start, text, style)
 
-    height = _estimate_row_height(text)
+    min_height = sum(
+        (sh.rowinfo_map[row + i].height if row + i in sh.rowinfo_map else 400)
+        for i in range(max(row_span, 1))
+    )
+    height = max(min_height, _estimate_row_height(text))
     row_obj = ws.row(row)
-    row_obj.height = height
+    row_obj.height = min(20000, int(height))
     row_obj.height_mismatch = True
-    for extra_row in range(row + 1, row_end + 1):
-        extra = ws.row(extra_row)
-        extra.height = max(extra.height, height // row_span)
-        extra.height_mismatch = True
+
+
+def _xlwt_border_line(style: int) -> int:
+    return {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}.get(style, 1)
 
 
 def _estimate_row_height(text: str, base: int = 480, per_line: int = 280, chars_per_line: int = 42) -> int:
@@ -437,51 +559,34 @@ def fill_8d_template(
     template_filename: str = DEFAULT_8D_TEMPLATE_FILENAME,
     template_bytes: Optional[bytes] = None,
 ) -> BytesIO:
-    """Fill the client 8D .xls template and return an in-memory workbook."""
+    """Fill the client 8D template and return an in-memory workbook."""
+    if template_bytes:
+        source = BytesIO(template_bytes)
+        name = template_filename.lower()
+    else:
+        source = resolve_template_path(template_filename, "AI-FA")
+        name = source.lower()
+
+    if name.endswith(".xlsx") or (template_bytes and template_filename.lower().endswith(".xlsx")):
+        from openpyxl import load_workbook
+
+        wb = load_workbook(source)
+        ws = wb.active
+        _fill_8d_openpyxl(ws, result, lang, analyst_name)
+        out = BytesIO()
+        wb.save(out)
+        out.seek(0)
+        return out
+
     xlrd = _load_xlrd()
     if template_bytes:
         rb = xlrd.open_workbook(file_contents=template_bytes, formatting_info=True)
     else:
-        template_path = resolve_template_path(template_filename, "AI-FA")
-        rb = xlrd.open_workbook(template_path, formatting_info=True)
+        rb = xlrd.open_workbook(source, formatting_info=True)
     wb = _xl_copy(rb)
     ws = wb.get_sheet(0)
     sh = rb.sheet_by_index(0)
-
-    product_name = _clean_text(result.product_name)
-    project_name = _clean_text(result.project_name) or product_name
-    today = datetime.now().strftime("%Y-%m-%d")
-    stage = _stage_name(result.failure_stage, lang)
-
-    interim = result.interim_actions_zh if lang == "zh" else result.interim_actions_en
-    permanent = result.permanent_actions_zh if lang == "zh" else result.permanent_actions_en
-    preventive = result.preventive_actions_zh if lang == "zh" else result.preventive_actions_en
-
-    _write_value_preserve(ws, rb, sh, 5, 1, project_name)
-    _write_value_preserve(ws, rb, sh, 5, 3, project_name)
-    _write_value_preserve(ws, rb, sh, 5, 6, product_name)
-    _write_value_preserve(ws, rb, sh, 6, 1, analyst_name or "-")
-    _write_value_preserve(ws, rb, sh, 6, 3, stage)
-    _write_value_preserve(ws, rb, sh, 6, 6, today)
-
-    sections = {
-        "d1": _build_d1_team(result, analyst_name, lang),
-        "d2": _build_d2_problem(result, lang),
-        "d3": _join_lines(interim, lang),
-        "d4": _build_cause_analysis(result, lang),
-        "d5": _join_lines(permanent, lang),
-        "d6": _build_d6_verification(result, lang),
-        "d7": _join_lines(preventive, lang),
-        "d8": _build_d8_recognition(lang),
-    }
-    for key, content in sections.items():
-        row, row_span = EIGHT_D_SECTIONS[key]
-        _write_section_cell(ws, rb, sh, row, row_span, content, force_top=True)
-        if key == "d4":
-            row_obj = ws.row(row)
-            row_obj.height = min(16000, _estimate_row_height(content, base=900, per_line=320))
-            row_obj.height_mismatch = True
-
+    _fill_8d_xls_legacy(ws, rb, sh, result, lang, analyst_name)
     out = BytesIO()
     wb.save(out)
     out.seek(0)
