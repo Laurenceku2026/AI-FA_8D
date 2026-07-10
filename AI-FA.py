@@ -419,9 +419,12 @@ TEXTS = {
         "template_label": "报告模板",
         "template_fill_btn": "📄 生成模板报告",
         "template_hint": "固定客户模板使用规则自动填表，无需调用 DeepSeek。",
-        "template_select_label": "客户报告模板（可选）",
+        "template_select_label": "报告模板",
         "template_default_option": "默认 8D 模板",
-        "template_select_hint": "分析前可选定导出模板；不选则使用默认 8D 客户模板。",
+        "template1_option": "模板-1",
+        "template_custom_option": "上传自定义模板",
+        "template_custom_upload": "上传 8D Excel 模板（.xls / .xlsx）",
+        "template_select_hint": "默认使用内置 8D 模板；可选模板-1 或上传客户自定义模板。",
         "clear_btn": "清除结果",
         
         "five_why_title": "5-Why 根因分析",
@@ -605,9 +608,12 @@ TEXTS = {
         "template_label": "Report template",
         "template_fill_btn": "📄 Generate template report",
         "template_hint": "Fixed client templates are filled by rules; DeepSeek is not required.",
-        "template_select_label": "Client report template (optional)",
+        "template_select_label": "Report template",
         "template_default_option": "Default 8D template",
-        "template_select_hint": "Optionally choose an export template before analysis; otherwise the default 8D template is used.",
+        "template1_option": "Template-1",
+        "template_custom_option": "Upload custom template",
+        "template_custom_upload": "Upload 8D Excel template (.xls / .xlsx)",
+        "template_select_hint": "Uses the built-in 8D template by default; choose Template-1 or upload a custom file.",
         "clear_btn": "Clear Results",
         
         "five_why_title": "5-Why Root Cause Analysis",
@@ -859,7 +865,19 @@ def web_search_dual(query: str, lang: str) -> str:
 
 from knowledge_base_utils import SupabaseKnowledgeDB
 from web_search_utils import web_search_dual as shared_web_search_dual
-from dfss_report_templates import export_report_template, list_report_templates, EIGHT_D_TEMPLATE_FILENAME
+from dfss_report_templates import (
+    DEFAULT_8D_TEMPLATE_FILENAME,
+    TEMPLATE1_8D_FILENAME,
+    export_report_template,
+)
+from fa_template_profiles import (
+    TEMPLATE_MODE_CUSTOM,
+    TEMPLATE_MODE_DEFAULT,
+    TEMPLATE_MODE_TEMPLATE1,
+    get_template_profile_label,
+    list_template_mode_options,
+    resolve_profile_template_filename,
+)
 
 
 def create_supabase_knowledge_db() -> SupabaseKnowledgeDB:
@@ -1021,10 +1039,10 @@ def _wrap_cause_text(cause: str, lang: str) -> str:
     if not text:
         return ""
     if lang == "zh":
-        line_width = 11
+        line_width = 10
         lines = [text[i : i + line_width] for i in range(0, len(text), line_width)]
-        return "\n".join(lines[:3])
-    return textwrap.fill(text, width=24)[:90]
+        return "\n".join(lines[:4])
+    return textwrap.fill(text, width=22)[:110]
 
 
 def _text_bbox_data(
@@ -1075,45 +1093,48 @@ def _draw_rib_causes(
     causes: List[str],
     lang: str,
     placed_boxes: List[Tuple[float, float, float, float]],
+    is_top: bool,
 ) -> None:
-    """沿大骨分布子原因：自动换行 + 碰撞避让。"""
+    """沿大骨分布子原因：上下分层排版 + 自动换行 + 碰撞避让。"""
     if not causes:
         return
 
     dx, dy = x1 - x0, y1 - y0
-    count = min(len(causes), 3)
-    cause_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT)
+    count = min(len(causes), 5)
+    cause_fontsize = _fishbone_mpl_font(max(FISHBONE_WORD_BODY_PT - 2, 8))
 
     for idx in range(count):
         wrapped = _wrap_cause_text(causes[idx], lang)
         if not wrapped:
             continue
 
-        t = 0.22 + idx * (0.56 / max(count - 1, 1))
+        t = 0.14 + idx * (0.72 / max(count - 1, 1))
         px = x0 + dx * t
         py = y0 + dy * t
-        branch_dir = -1 if idx % 2 == 0 else 1
-        ha = "right" if branch_dir < 0 else "left"
-        bx = px + branch_dir * 1.35
-        by = py + branch_dir * 0.12
+        side = -1 if idx % 2 == 0 else 1
+        stack_level = idx // 2
+        vertical_gap = 0.55 + stack_level * 0.68
+        by = py + vertical_gap if is_top else py - vertical_gap
+        bx = px + side * 1.05
+        ha = "right" if side < 0 else "left"
 
-        for attempt in range(14):
+        for attempt in range(16):
             bbox = _text_bbox_data(ax, bx, by, wrapped, cause_fontsize, ha=ha, va="center")
-            if not any(_boxes_overlap(bbox, existing) for existing in placed_boxes):
+            if not any(_boxes_overlap(bbox, existing, pad=0.12) for existing in placed_boxes):
                 break
-            by += 0.45 * (1 if branch_dir > 0 else -1)
+            by += (0.42 if is_top else -0.42)
             if attempt % 2 == 1:
-                bx += branch_dir * 0.3
+                bx += side * 0.28
 
-        ax.plot([px, bx], [py, by], "k:", linewidth=1.0, alpha=0.72)
+        ax.plot([px, bx], [py, by], "k:", linewidth=0.9, alpha=0.65)
         ax.text(
-            bx + (0.04 if branch_dir > 0 else -0.04),
+            bx + (0.05 if side > 0 else -0.05),
             by,
             wrapped,
             fontsize=cause_fontsize,
             ha=ha,
             va="center",
-            linespacing=1.12,
+            linespacing=1.08,
         )
         placed_boxes.append(_text_bbox_data(ax, bx, by, wrapped, cause_fontsize, ha=ha, va="center"))
 
@@ -1122,17 +1143,24 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
     """生成鱼骨图图片（支持双语）"""
     setup_chinese_font()
 
-    fig, ax = plt.subplots(figsize=(16, 12))
-    ax.set_xlim(0, 15.2)
-    ax.set_ylim(0, 12.5)
+    fig, ax = plt.subplots(figsize=(18, 14))
+    ax.set_xlim(0, 16.5)
+    ax.set_ylim(0, 14.8)
     ax.axis("off")
 
-    main_y = 6.2
-    main_x_start = 0.8
-    main_x_end = 13.4
+    main_y = 6.6
+    main_x_start = 0.6
+    main_x_end = 12.6
     category_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT + 1)
-    fish_head_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT + 2)
+    fish_head_fontsize = _fishbone_mpl_font(FISHBONE_WORD_BODY_PT + 1)
     title_fontsize = _fishbone_mpl_font(FISHBONE_WORD_HEADING_PT)
+    title_text = remove_bold_markers(get_text("fishbone_title"))
+    fish_head_text = get_text("symptom")[:16] if lang == "zh" else "Failure"
+
+    placed_boxes: List[Tuple[float, float, float, float]] = []
+    title_bbox = _text_bbox_data(ax, 8.0, 13.55, title_text, title_fontsize, ha="center", va="bottom")
+    placed_boxes.append(title_bbox)
+    ax.text(8.0, 13.55, title_text, fontsize=title_fontsize, ha="center", va="bottom", fontweight="bold")
 
     # 主骨
     ax.plot([main_x_start, main_x_end], [main_y, main_y], "k-", linewidth=3.5)
@@ -1142,12 +1170,18 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
         xytext=(main_x_end - 0.65, main_y),
         arrowprops=dict(arrowstyle="->", lw=3, color="black"),
     )
+    fish_x = main_x_end + 0.75
+    fish_bbox = _text_bbox_data(
+        ax, fish_x, main_y, fish_head_text, fish_head_fontsize, ha="left", va="center"
+    )
+    placed_boxes.append(fish_bbox)
     ax.text(
-        main_x_end + 0.15,
+        fish_x,
         main_y,
-        get_text("symptom")[:18] if lang == "zh" else "Failure",
+        fish_head_text,
         fontsize=fish_head_fontsize,
         va="center",
+        ha="left",
         fontweight="bold",
     )
 
@@ -1160,19 +1194,17 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
         "Measurement": "测",
     }
 
-    # 六大类沿主骨分散，鱼头左移后把肋骨尽量铺满主骨长度。
     categories_data = [
-        ("Man", fishbone.get_causes(lang, "Man"), 3.0, True),
-        ("Machine", fishbone.get_causes(lang, "Machine"), 6.2, True),
-        ("Material", fishbone.get_causes(lang, "Material"), 9.4, True),
-        ("Method", fishbone.get_causes(lang, "Method"), 4.6, False),
-        ("Environment", fishbone.get_causes(lang, "Environment"), 7.8, False),
-        ("Measurement", fishbone.get_causes(lang, "Measurement"), 11.0, False),
+        ("Man", fishbone.get_causes(lang, "Man"), 2.8, True),
+        ("Machine", fishbone.get_causes(lang, "Machine"), 6.0, True),
+        ("Material", fishbone.get_causes(lang, "Material"), 9.2, True),
+        ("Method", fishbone.get_causes(lang, "Method"), 4.2, False),
+        ("Environment", fishbone.get_causes(lang, "Environment"), 7.4, False),
+        ("Measurement", fishbone.get_causes(lang, "Measurement"), 10.6, False),
     ]
 
-    rib_dx = 2.6
-    rib_dy = 3.6
-    placed_boxes: List[Tuple[float, float, float, float]] = []
+    rib_dx = 2.5
+    rib_dy = 4.2
 
     for cat_key, causes, anchor_x, is_top in categories_data:
         display_name = cat_names_zh.get(cat_key, cat_key) if lang == "zh" else cat_key
@@ -1181,15 +1213,15 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
 
         ax.plot([anchor_x, end_x], [main_y, end_y], "k-", linewidth=2.2)
         cat_x = end_x - 0.1
-        cat_y = end_y + (0.25 if is_top else -0.25)
+        cat_y = end_y + (0.35 if is_top else -0.35)
         cat_va = "bottom" if is_top else "top"
         for attempt in range(8):
             cat_bbox = _text_bbox_data(
                 ax, cat_x, cat_y, display_name, category_fontsize, ha="right", va=cat_va
             )
-            if not any(_boxes_overlap(cat_bbox, existing) for existing in placed_boxes):
+            if not any(_boxes_overlap(cat_bbox, existing, pad=0.1) for existing in placed_boxes):
                 break
-            cat_y += 0.35 if is_top else -0.35
+            cat_y += 0.4 if is_top else -0.4
         ax.text(
             cat_x,
             cat_y,
@@ -1202,14 +1234,12 @@ def create_fishbone_image(fishbone: FishboneAnalysis, lang: str = "zh") -> bytes
         placed_boxes.append(
             _text_bbox_data(ax, cat_x, cat_y, display_name, category_fontsize, ha="right", va=cat_va)
         )
-        _draw_rib_causes(ax, anchor_x, main_y, end_x, end_y, causes, lang, placed_boxes)
+        _draw_rib_causes(ax, anchor_x, main_y, end_x, end_y, causes, lang, placed_boxes, is_top)
 
-    ax.text(7.6, 11.5, remove_bold_markers(get_text("fishbone_title")), fontsize=title_fontsize, ha="center", fontweight="bold")
-
-    plt.tight_layout(pad=0.4)
+    plt.tight_layout(pad=0.6)
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=200, bbox_inches="tight", pad_inches=0.2, facecolor="white")
+    plt.savefig(buf, format="png", dpi=200, bbox_inches="tight", pad_inches=0.25, facecolor="white")
     buf.seek(0)
     plt.close()
     
@@ -2070,8 +2100,12 @@ def main():
         st.session_state.project_name = ""
     if "uploaded_images" not in st.session_state:
         st.session_state.uploaded_images = []
-    if "selected_report_template" not in st.session_state:
-        st.session_state.selected_report_template = None
+    if "fa_template_mode" not in st.session_state:
+        st.session_state.fa_template_mode = TEMPLATE_MODE_DEFAULT
+    if "fa_custom_template_bytes" not in st.session_state:
+        st.session_state.fa_custom_template_bytes = None
+    if "fa_custom_template_name" not in st.session_state:
+        st.session_state.fa_custom_template_name = ""
     
     # ==================== 侧边栏（显示用户信息和剩余次数）====================
     render_sidebar_user_info()
@@ -2203,25 +2237,29 @@ def main():
         enable_8d = st.checkbox(get_text("gen_8d"), value=True)
 
     st.markdown(f"**{get_text('template_select_label')}**")
-    fa_templates = list_report_templates("AI-FA")
-    default_option = get_text("template_default_option")
-    template_choices = [default_option]
-    for name in fa_templates:
-        if name not in template_choices:
-            template_choices.append(name)
-    preselected = st.session_state.get("selected_report_template")
-    default_index = 0
-    if preselected and preselected in template_choices:
-        default_index = template_choices.index(preselected)
-    selected_choice = st.selectbox(
+    lang_ui = st.session_state.lang
+    mode_options = list_template_mode_options(lang_ui)
+    mode_ids = [mode for mode, _ in mode_options]
+    mode_labels = [label for _, label in mode_options]
+    current_mode = st.session_state.get("fa_template_mode", TEMPLATE_MODE_DEFAULT)
+    default_index = mode_ids.index(current_mode) if current_mode in mode_ids else 0
+    selected_label = st.selectbox(
         get_text("template_label"),
-        template_choices,
+        mode_labels,
         index=default_index,
         key="fa_adv_template_select",
     )
-    st.session_state.selected_report_template = (
-        None if selected_choice == default_option else selected_choice
-    )
+    selected_mode = mode_ids[mode_labels.index(selected_label)]
+    st.session_state.fa_template_mode = selected_mode
+    if selected_mode == TEMPLATE_MODE_CUSTOM:
+        custom_file = st.file_uploader(
+            get_text("template_custom_upload"),
+            type=["xls", "xlsx"],
+            key="fa_custom_template_upload",
+        )
+        if custom_file is not None:
+            st.session_state.fa_custom_template_bytes = custom_file.getvalue()
+            st.session_state.fa_custom_template_name = custom_file.name
     st.caption(get_text("template_select_hint"))
     
     st.markdown("---")
@@ -2410,49 +2448,61 @@ def main():
             )
 
         with col_template:
-            templates = list_report_templates("AI-FA")
-            if templates:
-                default_template = (
-                    EIGHT_D_TEMPLATE_FILENAME
-                    if EIGHT_D_TEMPLATE_FILENAME in templates
-                    else templates[0]
+            template_mode = st.session_state.get("fa_template_mode", TEMPLATE_MODE_DEFAULT)
+            if template_mode == TEMPLATE_MODE_CUSTOM:
+                selected_template = st.session_state.get("fa_custom_template_name", "custom_8d.xls")
+                template_caption = (
+                    f"当前模板：{get_text('template_custom_option')}（{selected_template}）"
+                    if lang == "zh"
+                    else f"Current template: custom ({selected_template})"
                 )
-                selected_template = st.session_state.get("selected_report_template") or default_template
-                if selected_template not in templates:
-                    selected_template = default_template
-                st.caption(
-                    f"当前模板：{selected_template}" if lang == "zh" else f"Current template: {selected_template}"
+            elif template_mode == TEMPLATE_MODE_TEMPLATE1:
+                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_TEMPLATE1) or TEMPLATE1_8D_FILENAME
+                template_caption = (
+                    f"当前模板：{get_template_profile_label(TEMPLATE_MODE_TEMPLATE1, lang)}（{selected_template}）"
+                    if lang == "zh"
+                    else f"Current template: {get_template_profile_label(TEMPLATE_MODE_TEMPLATE1, lang)} ({selected_template})"
                 )
-                st.caption(get_text("template_hint"))
-                if st.button(get_text("template_fill_btn"), use_container_width=True, key="fa_template_fill_btn"):
-                    try:
-                        template_bytes, template_mime = export_report_template(
-                            template_filename=selected_template,
-                            result=result,
-                            lang=lang,
-                            analyst_name=st.session_state.get("analyst_name", ""),
-                        )
-                        ext = os.path.splitext(selected_template)[1]
-                        st.session_state.fa_template_download = {
-                            "data": template_bytes.getvalue(),
-                            "name": f"{result.product_name}_{title_summary}_模板_{datetime.now().strftime('%Y%m%d')}{ext}",
-                            "mime": template_mime,
-                        }
-                    except Exception as exc:
-                        st.error(f"模板导出失败: {exc}" if lang == "zh" else f"Template export failed: {exc}")
-
-                if st.session_state.get("fa_template_download"):
-                    payload = st.session_state.fa_template_download
-                    st.download_button(
-                        label="📥 确认下载模板报告" if lang == "zh" else "📥 Confirm template download",
-                        data=payload["data"],
-                        file_name=re.sub(r'[\\/*?:"<>|]', '', payload["name"]),
-                        mime=payload["mime"],
-                        use_container_width=True,
-                        key="download_template_report",
-                    )
             else:
-                st.info("未找到报告模板，请将模板放入 templates/ 目录。" if lang == "zh" else "No report templates found in templates/.")
+                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_DEFAULT) or DEFAULT_8D_TEMPLATE_FILENAME
+                template_caption = (
+                    f"当前模板：{get_template_profile_label(TEMPLATE_MODE_DEFAULT, lang)}（{selected_template}）"
+                    if lang == "zh"
+                    else f"Current template: {get_template_profile_label(TEMPLATE_MODE_DEFAULT, lang)} ({selected_template})"
+                )
+            st.caption(template_caption)
+            st.caption(get_text("template_hint"))
+            if st.button(get_text("template_fill_btn"), use_container_width=True, key="fa_template_fill_btn"):
+                try:
+                    template_bytes, template_mime = export_report_template(
+                        result=result,
+                        lang=lang,
+                        analyst_name=st.session_state.get("analyst_name", ""),
+                        template_mode=template_mode,
+                        template_filename=selected_template,
+                        template_bytes=st.session_state.get("fa_custom_template_bytes")
+                        if template_mode == TEMPLATE_MODE_CUSTOM
+                        else None,
+                    )
+                    ext = os.path.splitext(selected_template)[1] or ".xls"
+                    st.session_state.fa_template_download = {
+                        "data": template_bytes.getvalue(),
+                        "name": f"{result.product_name}_{title_summary}_模板_{datetime.now().strftime('%Y%m%d')}{ext}",
+                        "mime": template_mime,
+                    }
+                except Exception as exc:
+                    st.error(f"模板导出失败: {exc}" if lang == "zh" else f"Template export failed: {exc}")
+
+            if st.session_state.get("fa_template_download"):
+                payload = st.session_state.fa_template_download
+                st.download_button(
+                    label="📥 确认下载模板报告" if lang == "zh" else "📥 Confirm template download",
+                    data=payload["data"],
+                    file_name=re.sub(r'[\\/*?:"<>|]', '', payload["name"]),
+                    mime=payload["mime"],
+                    use_container_width=True,
+                    key="download_template_report",
+                )
 
 
 if __name__ == "__main__":
