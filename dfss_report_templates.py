@@ -35,7 +35,10 @@ EXAMPLE_8D_ROWS = {
 D4_COL_START = 1
 D4_COL_END = 7
 FISHBONE_IMAGE_COL = 3  # C 列起嵌入鱼骨图
+FISHBONE_IMAGE_COL_END = 7  # G 列
 FISHBONE_ROW_MIN_HEIGHT = 320.0
+SIGNATURE_ROWS = (34, 35)
+SIGNATURE_ROW_HEIGHT = 30.0
 
 
 def _load_xlrd():
@@ -444,13 +447,30 @@ def _write_content_row(ws, row: int, text: str, chars_per_line: int = 52) -> Non
     )
 
 
+def _column_width_pixels(ws, col_idx: int) -> int:
+    from openpyxl.utils import get_column_letter
+
+    letter = get_column_letter(col_idx)
+    width = ws.column_dimensions[letter].width
+    if width is None:
+        width = 8.43
+    return int(width * 7 + 5)
+
+
+def _merged_cols_width_pixels(ws, col_start: int, col_end: int) -> int:
+    return sum(_column_width_pixels(ws, col) for col in range(col_start, col_end + 1))
+
+
 def _insert_fishbone_image(ws, row: int, image_bytes: Optional[bytes]) -> None:
-    """在 C:G 区域嵌入鱼骨图 PNG（与 Example_8D 布局一致）。"""
+    """在 C:G 区域嵌入鱼骨图 PNG，水平/垂直居中。"""
     ws._images = []
     if not image_bytes:
         return
     try:
         from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+        from openpyxl.drawing.xdr import XDRPositiveSize2D
+        from openpyxl.utils.units import pixels_to_EMU, points_to_pixels
     except ImportError:
         return
     img = XLImage(BytesIO(image_bytes))
@@ -463,7 +483,31 @@ def _insert_fishbone_image(ws, row: int, image_bytes: Optional[bytes]) -> None:
         ratio = max_h / img.height
         img.width = int(img.width * ratio)
         img.height = int(img.height * ratio)
-    ws.add_image(img, f"{chr(64 + FISHBONE_IMAGE_COL)}{row}")
+
+    row_height_pt = float(ws.row_dimensions[row].height or FISHBONE_ROW_MIN_HEIGHT)
+    row_height_emu = pixels_to_EMU(points_to_pixels(row_height_pt))
+    img_w_emu = pixels_to_EMU(img.width)
+    img_h_emu = pixels_to_EMU(img.height)
+    row_off = max(0, (row_height_emu - img_h_emu) // 2)
+
+    area_px = _merged_cols_width_pixels(ws, FISHBONE_IMAGE_COL, FISHBONE_IMAGE_COL_END)
+    area_w_emu = pixels_to_EMU(area_px)
+    col_off = max(0, (area_w_emu - img_w_emu) // 2)
+
+    marker = AnchorMarker(
+        col=FISHBONE_IMAGE_COL - 1,
+        row=row - 1,
+        colOff=col_off,
+        rowOff=row_off,
+    )
+    img.anchor = OneCellAnchor(_from=marker, ext=XDRPositiveSize2D(img_w_emu, img_h_emu))
+    ws.add_image(img)
+
+
+def _normalize_signature_rows(ws) -> None:
+    """签名区各行统一行高。"""
+    for row in SIGNATURE_ROWS:
+        ws.row_dimensions[row].height = SIGNATURE_ROW_HEIGHT
 
 
 def _write_d4_fishbone_row(ws, row: int, text: str, image_bytes: Optional[bytes]) -> None:
@@ -510,6 +554,7 @@ def _fill_8d_openpyxl(ws, result, lang: str, analyst_name: str) -> None:
     _write_d4_fishbone_row(ws, rows["d4_fishbone"], d4_sections[1], fishbone_image)
     _write_content_row(ws, rows["d4_rules"], d4_sections[2])
     _write_content_row(ws, rows["d4_root"], d4_sections[3])
+    _normalize_signature_rows(ws)
 
 
 def _fill_8d_xls_legacy(ws, rb, sh, result, lang: str, analyst_name: str) -> None:
