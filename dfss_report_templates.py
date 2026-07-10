@@ -18,17 +18,19 @@ from fa_template_profiles import (
 
 TEMPLATE_EXTENSIONS = (".xlsx", ".xls", ".docx")
 
-# openpyxl 1-based 行号 + 参与行高计算的跨行数（与模板合并区一致）
+# openpyxl 1-based 行号（_ensure_template_layout 扩展 D4 后固定）
 EIGHT_D_SECTIONS = {
     "d1": (9, 1),
     "d2": (12, 1),
     "d3": (15, 2),
-    "d4": (19, 2),
-    "d5": (23, 1),
-    "d6": (26, 1),
-    "d7": (29, 1),
-    "d8": (32, 1),
+    "d5": (25, 1),
+    "d6": (28, 1),
+    "d7": (31, 1),
 }
+# D4 原因分析：4 个独立 A~G 合并单元格
+D4_CAUSE_ROWS = (19, 20, 21, 22)
+D4_CAUSE_COL_START = 1
+D4_CAUSE_COL_END = 7
 EIGHT_D_CONTENT_COL = 1
 
 
@@ -269,23 +271,22 @@ def _build_association_rules_section(result, lang: str) -> str:
     return "\n".join(lines) if lines else ("暂无显著关联规则。" if lang == "zh" else "No significant association rules.")
 
 
-def _build_cause_analysis(result, lang: str) -> str:
-    root = _clean_text(result.root_cause_zh if lang == "zh" else result.root_cause_en)
-    sections: List[str] = []
+def _build_d4_five_why(result, lang: str) -> str:
+    title = "【5-Why 分析】" if lang == "zh" else "[5-Why Analysis]"
+    if not result.five_why:
+        body = "待补充" if lang == "zh" else "Pending"
+        return f"{title}\n{body}"
+    lines = [title]
+    for item in result.five_why:
+        q = _clean_text(item.question_zh if lang == "zh" else item.question_en)
+        a = _clean_text(item.answer_zh if lang == "zh" else item.answer_en)
+        if q or a:
+            lines.append(f"Why-{item.level}: {q}\n→ {a}")
+    return "\n".join(lines)
 
-    sections.append("【5-Why 分析】" if lang == "zh" else "[5-Why Analysis]")
-    if result.five_why:
-        why_lines: List[str] = []
-        for item in result.five_why:
-            q = _clean_text(item.question_zh if lang == "zh" else item.question_en)
-            a = _clean_text(item.answer_zh if lang == "zh" else item.answer_en)
-            if q or a:
-                why_lines.append(f"Why-{item.level}: {q}\n→ {a}")
-        sections.append("\n".join(why_lines))
-    else:
-        sections.append("待补充" if lang == "zh" else "Pending")
 
-    fishbone_dict = result.fishbone.to_dict(lang)
+def _build_d4_fishbone(result, lang: str) -> str:
+    title = "【鱼骨图分析（6M）】" if lang == "zh" else "[Fishbone Analysis (6M)]"
     cat_names_zh = {
         "Man": "人",
         "Machine": "机",
@@ -294,34 +295,48 @@ def _build_cause_analysis(result, lang: str) -> str:
         "Environment": "环",
         "Measurement": "测",
     }
-    sections.append("【鱼骨图分析（6M）】" if lang == "zh" else "[Fishbone Analysis (6M)]")
-    fishbone_lines: List[str] = []
+    lines = [title]
+    fishbone_dict = result.fishbone.to_dict(lang)
     for cat, causes in fishbone_dict.items():
         if not causes:
             continue
         cat_label = cat_names_zh.get(cat, cat) if lang == "zh" else cat
         cleaned = [_clean_text(c) for c in causes if _clean_text(c)]
         if cleaned:
-            fishbone_lines.append(f"{cat_label}：")
+            lines.append(f"{cat_label}：")
             for i, cause in enumerate(cleaned[:6], 1):
-                fishbone_lines.append(f"  {i}. {cause}")
-    sections.append("\n".join(fishbone_lines) if fishbone_lines else ("待补充" if lang == "zh" else "Pending"))
+                lines.append(f"  {i}. {cause}")
+    if len(lines) == 1:
+        lines.append("待补充" if lang == "zh" else "Pending")
+    return "\n".join(lines)
 
-    sections.append("【关联规则挖掘】" if lang == "zh" else "[Association Rule Mining]")
-    sections.append(_build_association_rules_section(result, lang))
 
-    sections.append("【根因结论】" if lang == "zh" else "[Root Cause Conclusion]")
+def _build_d4_root_conclusion(result, lang: str) -> str:
+    title = "【根因结论】" if lang == "zh" else "[Root Cause Conclusion]"
+    root = _clean_text(result.root_cause_zh if lang == "zh" else result.root_cause_en)
     conf = getattr(result, "root_cause_confidence", 0) or 0
     try:
         conf_text = f"{float(conf):.0%}"
     except (TypeError, ValueError):
         conf_text = str(conf)
     if lang == "zh":
-        sections.append(f"{root}\n（置信度：{conf_text}）")
-    else:
-        sections.append(f"{root}\n(Confidence: {conf_text})")
+        return f"{title}\n{root}\n（置信度：{conf_text}）"
+    return f"{title}\n{root}\n(Confidence: {conf_text})"
 
-    return "\n\n".join(sections)
+
+def _build_d4_sections(result, lang: str) -> List[str]:
+    rules_title = "【关联规则挖掘】" if lang == "zh" else "[Association Rule Mining]"
+    return [
+        _build_d4_five_why(result, lang),
+        _build_d4_fishbone(result, lang),
+        f"{rules_title}\n{_build_association_rules_section(result, lang)}",
+        _build_d4_root_conclusion(result, lang),
+    ]
+
+
+def _build_cause_analysis(result, lang: str) -> str:
+    """Legacy combined text for .xls exports."""
+    return "\n\n".join(_build_d4_sections(result, lang))
 
 
 def _build_d6_verification(result, lang: str) -> str:
@@ -397,8 +412,50 @@ def _section_min_height(ws, row: int, row_span: int) -> float:
     return total
 
 
+def _merge_row_ag(ws, row: int) -> None:
+    """Ensure row is merged A~G."""
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_row <= row <= merged.max_row and merged.min_col <= 1 <= merged.max_col:
+            if merged.min_row == merged.max_row == row and merged.min_col == 1 and merged.max_col >= 7:
+                return
+    ws.merge_cells(
+        start_row=row,
+        start_column=D4_CAUSE_COL_START,
+        end_row=row,
+        end_column=D4_CAUSE_COL_END,
+    )
+
+
+def _find_d8_content_row(ws) -> int:
+    for row in range(30, 40):
+        value = ws.cell(row=row, column=1).value
+        if value and "8." in str(value) and ("祝贺" in str(value) or "Congratulate" in str(value)):
+            return row + 1
+    return 34
+
+
+def _ensure_template_layout(ws) -> int:
+    """Ensure D4/D8 content rows are merged A~G. Returns D8 content row."""
+    for row in D4_CAUSE_ROWS:
+        _merge_row_ag(ws, row)
+    d8_content_row = _find_d8_content_row(ws)
+    _merge_row_ag(ws, d8_content_row)
+    return d8_content_row
+
+
+def _write_merged_row_ag(ws, row: int, text: str) -> None:
+    """Write one A~G merged row, top-left aligned."""
+    _merge_row_ag(ws, row)
+    cell = ws.cell(row=row, column=D4_CAUSE_COL_START)
+    cell.value = text
+    cell.alignment = _top_alignment()
+    min_height = float(ws.row_dimensions[row].height or 18.0)
+    ws.row_dimensions[row].height = _estimate_openpyxl_row_height(text, min_height=min_height)
+
+
 def _write_openpyxl_section(ws, row: int, row_span: int, text: str) -> None:
-    """Write into merged area top-left only; preserve template borders."""
+    """Write into merged A~G area top-left only; preserve template borders."""
+    _merge_row_ag(ws, row)
     cell = ws.cell(row=row, column=EIGHT_D_CONTENT_COL)
     cell.value = text
     cell.alignment = _top_alignment()
@@ -408,6 +465,8 @@ def _write_openpyxl_section(ws, row: int, row_span: int, text: str) -> None:
 
 
 def _fill_8d_openpyxl(ws, result, lang: str, analyst_name: str) -> None:
+    d8_content_row = _ensure_template_layout(ws)
+
     product_name = _clean_text(result.product_name)
     project_name = _clean_text(result.project_name) or product_name
     today = datetime.now().strftime("%Y-%m-%d")
@@ -428,15 +487,18 @@ def _fill_8d_openpyxl(ws, result, lang: str, analyst_name: str) -> None:
         "d1": _build_d1_team(result, analyst_name, lang),
         "d2": _build_d2_problem(result, lang),
         "d3": _join_lines(interim, lang),
-        "d4": _build_cause_analysis(result, lang),
         "d5": _join_lines(permanent, lang),
         "d6": _build_d6_verification(result, lang),
         "d7": _join_lines(preventive, lang),
-        "d8": _build_d8_recognition(lang),
     }
     for key, content in sections.items():
         row, row_span = EIGHT_D_SECTIONS[key]
         _write_openpyxl_section(ws, row, row_span, content)
+
+    for row, content in zip(D4_CAUSE_ROWS, _build_d4_sections(result, lang)):
+        _write_merged_row_ag(ws, row, content)
+
+    _write_merged_row_ag(ws, d8_content_row, _build_d8_recognition(lang))
 
 
 def _fill_8d_xls_legacy(ws, rb, sh, result, lang: str, analyst_name: str) -> None:
@@ -462,15 +524,15 @@ def _fill_8d_xls_legacy(ws, rb, sh, result, lang: str, analyst_name: str) -> Non
         "d1": _build_d1_team(result, analyst_name, lang),
         "d2": _build_d2_problem(result, lang),
         "d3": _join_lines(interim, lang),
-        "d4": _build_cause_analysis(result, lang),
         "d5": _join_lines(permanent, lang),
         "d6": _build_d6_verification(result, lang),
         "d7": _join_lines(preventive, lang),
-        "d8": _build_d8_recognition(lang),
     }
     for key, content in sections.items():
         row, row_span = legacy_rows[key]
         _write_section_cell(ws, rb, sh, row, row_span, content, force_top=True)
+    _write_section_cell(ws, rb, sh, 18, 2, _build_cause_analysis(result, lang), force_top=True)
+    _write_section_cell(ws, rb, sh, 31, 1, _build_d8_recognition(lang), force_top=True)
 
 
 def _xlwt_border_line(style: int) -> int:
