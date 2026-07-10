@@ -419,6 +419,9 @@ TEXTS = {
         "template_label": "报告模板",
         "template_fill_btn": "📄 生成模板报告",
         "template_hint": "固定客户模板使用规则自动填表，无需调用 DeepSeek。",
+        "template_select_label": "客户报告模板（可选）",
+        "template_default_option": "默认 8D 模板",
+        "template_select_hint": "分析前可选定导出模板；不选则使用默认 8D 客户模板。",
         "clear_btn": "清除结果",
         
         "five_why_title": "5-Why 根因分析",
@@ -602,6 +605,9 @@ TEXTS = {
         "template_label": "Report template",
         "template_fill_btn": "📄 Generate template report",
         "template_hint": "Fixed client templates are filled by rules; DeepSeek is not required.",
+        "template_select_label": "Client report template (optional)",
+        "template_default_option": "Default 8D template",
+        "template_select_hint": "Optionally choose an export template before analysis; otherwise the default 8D template is used.",
         "clear_btn": "Clear Results",
         
         "five_why_title": "5-Why Root Cause Analysis",
@@ -853,7 +859,7 @@ def web_search_dual(query: str, lang: str) -> str:
 
 from knowledge_base_utils import SupabaseKnowledgeDB
 from web_search_utils import web_search_dual as shared_web_search_dual
-from dfss_report_templates import export_report_template, list_report_templates
+from dfss_report_templates import export_report_template, list_report_templates, EIGHT_D_TEMPLATE_FILENAME
 
 
 def create_supabase_knowledge_db() -> SupabaseKnowledgeDB:
@@ -2064,6 +2070,8 @@ def main():
         st.session_state.project_name = ""
     if "uploaded_images" not in st.session_state:
         st.session_state.uploaded_images = []
+    if "selected_report_template" not in st.session_state:
+        st.session_state.selected_report_template = None
     
     # ==================== 侧边栏（显示用户信息和剩余次数）====================
     render_sidebar_user_info()
@@ -2193,6 +2201,28 @@ def main():
         enable_spc = st.checkbox(get_text("spc"), value=True)
     with col_adv4:
         enable_8d = st.checkbox(get_text("gen_8d"), value=True)
+
+    st.markdown(f"**{get_text('template_select_label')}**")
+    fa_templates = list_report_templates("AI-FA")
+    default_option = get_text("template_default_option")
+    template_choices = [default_option]
+    for name in fa_templates:
+        if name not in template_choices:
+            template_choices.append(name)
+    preselected = st.session_state.get("selected_report_template")
+    default_index = 0
+    if preselected and preselected in template_choices:
+        default_index = template_choices.index(preselected)
+    selected_choice = st.selectbox(
+        get_text("template_label"),
+        template_choices,
+        index=default_index,
+        key="fa_adv_template_select",
+    )
+    st.session_state.selected_report_template = (
+        None if selected_choice == default_option else selected_choice
+    )
+    st.caption(get_text("template_select_hint"))
     
     st.markdown("---")
     
@@ -2382,7 +2412,17 @@ def main():
         with col_template:
             templates = list_report_templates("AI-FA")
             if templates:
-                selected_template = st.selectbox(get_text("template_label"), templates, key="fa_template_select")
+                default_template = (
+                    EIGHT_D_TEMPLATE_FILENAME
+                    if EIGHT_D_TEMPLATE_FILENAME in templates
+                    else templates[0]
+                )
+                selected_template = st.session_state.get("selected_report_template") or default_template
+                if selected_template not in templates:
+                    selected_template = default_template
+                st.caption(
+                    f"当前模板：{selected_template}" if lang == "zh" else f"Current template: {selected_template}"
+                )
                 st.caption(get_text("template_hint"))
                 if st.button(get_text("template_fill_btn"), use_container_width=True, key="fa_template_fill_btn"):
                     try:
