@@ -18,20 +18,24 @@ from fa_template_profiles import (
 
 TEMPLATE_EXTENSIONS = (".xlsx", ".xls", ".docx")
 
-# openpyxl 1-based 行号（_ensure_template_layout 扩展 D4 后固定）
-EIGHT_D_SECTIONS = {
-    "d1": (9, 1),
-    "d2": (12, 1),
-    "d3": (15, 2),
-    "d5": (25, 1),
-    "d6": (28, 1),
-    "d7": (31, 1),
+# Example_8D.xlsx 行号（1-based，与模板严格一致）
+EXAMPLE_8D_ROWS = {
+    "d1": 9,
+    "d2": 12,
+    "d3": 15,
+    "d4_why": 18,
+    "d4_fishbone": 19,
+    "d4_rules": 20,
+    "d4_root": 21,
+    "d5": 24,
+    "d6": 27,
+    "d7": 30,
+    "d8": 33,
 }
-# D4 原因分析：4 个独立 A~G 合并单元格
-D4_CAUSE_ROWS = (19, 20, 21, 22)
-D4_CAUSE_COL_START = 1
-D4_CAUSE_COL_END = 7
-EIGHT_D_CONTENT_COL = 1
+D4_COL_START = 1
+D4_COL_END = 7
+FISHBONE_IMAGE_COL = 3  # C 列起嵌入鱼骨图
+FISHBONE_ROW_MIN_HEIGHT = 320.0
 
 
 def _load_xlrd():
@@ -155,10 +159,17 @@ def resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
         markers = []
         if "默认" in filename or "default" in filename.lower():
             markers = ["默认", "8d"]
-        elif "模板1" in filename or "template" in filename.lower():
+        elif "模板1" in filename or "template" in filename.lower() or "example" in filename.lower():
             markers = ["模板1", "8d"]
         else:
             markers = ["8d"]
+        example_path = os.path.join(
+            r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template",
+            app_key,
+            "Example_8D.xlsx",
+        )
+        if os.path.isfile(example_path) and ("模板1" in filename or "example" in filename.lower()):
+            return example_path
         for name in os.listdir(templates_dir):
             lower = name.lower()
             if not lower.endswith((".xls", ".xlsx")):
@@ -183,8 +194,25 @@ def _clean_text(text: str) -> str:
 def _join_lines(items: List[str], lang: str) -> str:
     cleaned = [_clean_text(x) for x in items if _clean_text(x)]
     if cleaned:
-        return "\n".join(f"{i + 1}. {line}" for i, line in enumerate(cleaned))
-    return "待补充" if lang == "zh" else "Pending"
+        body = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(cleaned))
+        return _format_content(body)
+    return _format_content("待补充" if lang == "zh" else "Pending")
+
+
+def _format_content(body: str) -> str:
+    """内容单元格：先空一行再写正文（与 Example_8D 一致）。"""
+    text = (body or "").strip()
+    if not text:
+        return "\n"
+    return f"\n{text}"
+
+
+def _format_titled_block(title: str, body: str) -> str:
+    """D4 子节：空行 + 标题 + 空行 + 正文。"""
+    text = (body or "").strip()
+    if text:
+        return f"\n{title}\n\n{text}"
+    return f"\n{title}\n"
 
 
 def _stage_name(stage: int, lang: str) -> str:
@@ -210,7 +238,7 @@ def _build_d1_team(result, analyst_name: str, lang: str) -> str:
             "2. Design engineer: root cause analysis and permanent actions",
             "3. Quality engineer: containment, verification, and standardization",
         ]
-    return "\n".join(lines)
+    return _format_content("\n".join(lines))
 
 
 def _build_d2_problem(result, lang: str) -> str:
@@ -238,7 +266,7 @@ def _build_d2_problem(result, lang: str) -> str:
             "How: Detected during operation or inspection",
             f"Severity: {stage} (confidence {result.root_cause_confidence:.0%})",
         ]
-    return "\n".join(parts)
+    return _format_content("\n".join(parts))
 
 
 def _build_association_rules_section(result, lang: str) -> str:
@@ -271,22 +299,31 @@ def _build_association_rules_section(result, lang: str) -> str:
     return "\n".join(lines) if lines else ("暂无显著关联规则。" if lang == "zh" else "No significant association rules.")
 
 
-def _build_d4_five_why(result, lang: str) -> str:
-    title = "【5-Why 分析】" if lang == "zh" else "[5-Why Analysis]"
+def _d4_title(key: str, lang: str) -> str:
+    titles = {
+        "why": ("【5-Why 分析】", "[5-Why Analysis]"),
+        "fishbone": ("【鱼骨图分析（6M）】", "[Fishbone Analysis (6M)]"),
+        "rules": ("【关联规则挖掘】", "[Association Rule Mining]"),
+        "root": ("【根因结论】", "[Root Cause Conclusion]"),
+    }
+    zh, en = titles[key]
+    return zh if lang == "zh" else en
+
+
+def _build_d4_five_why_body(result, lang: str) -> str:
     if not result.five_why:
-        body = "待补充" if lang == "zh" else "Pending"
-        return f"{title}\n{body}"
-    lines = [title]
+        return "待补充" if lang == "zh" else "Pending"
+    lines: List[str] = []
     for item in result.five_why:
         q = _clean_text(item.question_zh if lang == "zh" else item.question_en)
         a = _clean_text(item.answer_zh if lang == "zh" else item.answer_en)
         if q or a:
             lines.append(f"Why-{item.level}: {q}\n→ {a}")
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else ("待补充" if lang == "zh" else "Pending")
 
 
-def _build_d4_fishbone(result, lang: str) -> str:
-    title = "【鱼骨图分析（6M）】" if lang == "zh" else "[Fishbone Analysis (6M)]"
+def _build_d4_fishbone_text_body(result, lang: str) -> str:
+    """鱼骨图左侧 A:B 文字描述（不含标题）。"""
     cat_names_zh = {
         "Man": "人",
         "Machine": "机",
@@ -295,7 +332,7 @@ def _build_d4_fishbone(result, lang: str) -> str:
         "Environment": "环",
         "Measurement": "测",
     }
-    lines = [title]
+    lines: List[str] = []
     fishbone_dict = result.fishbone.to_dict(lang)
     for cat, causes in fishbone_dict.items():
         if not causes:
@@ -306,13 +343,10 @@ def _build_d4_fishbone(result, lang: str) -> str:
             lines.append(f"{cat_label}：")
             for i, cause in enumerate(cleaned[:6], 1):
                 lines.append(f"  {i}. {cause}")
-    if len(lines) == 1:
-        lines.append("待补充" if lang == "zh" else "Pending")
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else ("待补充" if lang == "zh" else "Pending")
 
 
-def _build_d4_root_conclusion(result, lang: str) -> str:
-    title = "【根因结论】" if lang == "zh" else "[Root Cause Conclusion]"
+def _build_d4_root_body(result, lang: str) -> str:
     root = _clean_text(result.root_cause_zh if lang == "zh" else result.root_cause_en)
     conf = getattr(result, "root_cause_confidence", 0) or 0
     try:
@@ -320,23 +354,18 @@ def _build_d4_root_conclusion(result, lang: str) -> str:
     except (TypeError, ValueError):
         conf_text = str(conf)
     if lang == "zh":
-        return f"{title}\n{root}\n（置信度：{conf_text}）"
-    return f"{title}\n{root}\n(Confidence: {conf_text})"
+        return f"{root}\n（置信度：{conf_text}）"
+    return f"{root}\n(Confidence: {conf_text})"
 
 
 def _build_d4_sections(result, lang: str) -> List[str]:
-    rules_title = "【关联规则挖掘】" if lang == "zh" else "[Association Rule Mining]"
     return [
-        _build_d4_five_why(result, lang),
-        _build_d4_fishbone(result, lang),
-        f"{rules_title}\n{_build_association_rules_section(result, lang)}",
-        _build_d4_root_conclusion(result, lang),
+        _format_titled_block(_d4_title("why", lang), _build_d4_five_why_body(result, lang)),
+        _format_titled_block(_d4_title("fishbone", lang), _build_d4_fishbone_text_body(result, lang)),
+        _format_titled_block(_d4_title("rules", lang), _build_association_rules_section(result, lang)),
+        _format_titled_block(_d4_title("root", lang), _build_d4_root_body(result, lang)),
     ]
 
-
-def _build_cause_analysis(result, lang: str) -> str:
-    """Legacy combined text for .xls exports."""
-    return "\n\n".join(_build_d4_sections(result, lang))
 
 
 def _build_d6_verification(result, lang: str) -> str:
@@ -361,7 +390,7 @@ def _build_d6_verification(result, lang: str) -> str:
             if lang == "zh"
             else f"SPC: {str(result.spc_analysis.get('summary', 'Time-series reviewed'))[:120]}"
         )
-    return "\n".join(lines)
+    return _format_content("\n".join(lines))
 
 
 def _build_d8_recognition(lang: str) -> str:
@@ -404,68 +433,53 @@ def _set_openpyxl_value(ws, row: int, col: int, value: str) -> None:
     cell.alignment = _top_alignment()
 
 
-def _section_min_height(ws, row: int, row_span: int) -> float:
-    total = 0.0
-    for offset in range(row_span):
-        h = ws.row_dimensions[row + offset].height
-        total += float(h) if h else 15.0
-    return total
-
-
-def _merge_row_ag(ws, row: int) -> None:
-    """Ensure row is merged A~G."""
-    for merged in list(ws.merged_cells.ranges):
-        if merged.min_row <= row <= merged.max_row and merged.min_col <= 1 <= merged.max_col:
-            if merged.min_row == merged.max_row == row and merged.min_col == 1 and merged.max_col >= 7:
-                return
-    ws.merge_cells(
-        start_row=row,
-        start_column=D4_CAUSE_COL_START,
-        end_row=row,
-        end_column=D4_CAUSE_COL_END,
-    )
-
-
-def _find_d8_content_row(ws) -> int:
-    for row in range(30, 40):
-        value = ws.cell(row=row, column=1).value
-        if value and "8." in str(value) and ("祝贺" in str(value) or "Congratulate" in str(value)):
-            return row + 1
-    return 34
-
-
-def _ensure_template_layout(ws) -> int:
-    """Ensure D4/D8 content rows are merged A~G. Returns D8 content row."""
-    for row in D4_CAUSE_ROWS:
-        _merge_row_ag(ws, row)
-    d8_content_row = _find_d8_content_row(ws)
-    _merge_row_ag(ws, d8_content_row)
-    return d8_content_row
-
-
-def _write_merged_row_ag(ws, row: int, text: str) -> None:
-    """Write one A~G merged row, top-left aligned."""
-    _merge_row_ag(ws, row)
-    cell = ws.cell(row=row, column=D4_CAUSE_COL_START)
+def _write_content_row(ws, row: int, text: str, chars_per_line: int = 52) -> None:
+    """写入 A~G 合并内容行（不改动模板已有合并）。"""
+    cell = ws.cell(row=row, column=D4_COL_START)
     cell.value = text
     cell.alignment = _top_alignment()
     min_height = float(ws.row_dimensions[row].height or 18.0)
-    ws.row_dimensions[row].height = _estimate_openpyxl_row_height(text, min_height=min_height)
+    ws.row_dimensions[row].height = _estimate_openpyxl_row_height(
+        text, min_height=min_height, chars_per_line=chars_per_line
+    )
 
 
-def _write_openpyxl_section(ws, row: int, row_span: int, text: str) -> None:
-    """Write into merged A~G area top-left only; preserve template borders."""
-    _merge_row_ag(ws, row)
-    cell = ws.cell(row=row, column=EIGHT_D_CONTENT_COL)
+def _insert_fishbone_image(ws, row: int, image_bytes: Optional[bytes]) -> None:
+    """在 C:G 区域嵌入鱼骨图 PNG（与 Example_8D 布局一致）。"""
+    ws._images = []
+    if not image_bytes:
+        return
+    try:
+        from openpyxl.drawing.image import Image as XLImage
+    except ImportError:
+        return
+    img = XLImage(BytesIO(image_bytes))
+    max_w, max_h = 520, 400
+    if img.width > max_w:
+        ratio = max_w / img.width
+        img.width = int(img.width * ratio)
+        img.height = int(img.height * ratio)
+    if img.height > max_h:
+        ratio = max_h / img.height
+        img.width = int(img.width * ratio)
+        img.height = int(img.height * ratio)
+    ws.add_image(img, f"{chr(64 + FISHBONE_IMAGE_COL)}{row}")
+
+
+def _write_d4_fishbone_row(ws, row: int, text: str, image_bytes: Optional[bytes]) -> None:
+    """R19：A:B 文字 + C:G 鱼骨图。"""
+    cell = ws.cell(row=row, column=D4_COL_START)
     cell.value = text
     cell.alignment = _top_alignment()
-    min_height = _section_min_height(ws, row, row_span)
-    extra = 24.0 if row_span > 1 else 0.0
-    ws.row_dimensions[row].height = _estimate_openpyxl_row_height(text, min_height=min_height + extra)
+    text_height = _estimate_openpyxl_row_height(text, min_height=18.0, chars_per_line=28)
+    image_height = FISHBONE_ROW_MIN_HEIGHT if image_bytes else 0.0
+    ws.row_dimensions[row].height = max(text_height, image_height, float(ws.row_dimensions[row].height or 0))
+    _insert_fishbone_image(ws, row, image_bytes)
 
 
 def _fill_8d_openpyxl(ws, result, lang: str, analyst_name: str) -> None:
-    d8_content_row = _ensure_template_layout(ws)
+    rows = EXAMPLE_8D_ROWS
+    fishbone_image = getattr(result, "fishbone_image", None)
 
     product_name = _clean_text(result.product_name)
     project_name = _clean_text(result.project_name) or product_name
@@ -483,22 +497,19 @@ def _fill_8d_openpyxl(ws, result, lang: str, analyst_name: str) -> None:
     _set_openpyxl_value(ws, 7, 4, stage)
     _set_openpyxl_value(ws, 7, 7, today)
 
-    sections = {
-        "d1": _build_d1_team(result, analyst_name, lang),
-        "d2": _build_d2_problem(result, lang),
-        "d3": _join_lines(interim, lang),
-        "d5": _join_lines(permanent, lang),
-        "d6": _build_d6_verification(result, lang),
-        "d7": _join_lines(preventive, lang),
-    }
-    for key, content in sections.items():
-        row, row_span = EIGHT_D_SECTIONS[key]
-        _write_openpyxl_section(ws, row, row_span, content)
+    _write_content_row(ws, rows["d1"], _build_d1_team(result, analyst_name, lang))
+    _write_content_row(ws, rows["d2"], _build_d2_problem(result, lang))
+    _write_content_row(ws, rows["d3"], _join_lines(interim, lang))
+    _write_content_row(ws, rows["d5"], _join_lines(permanent, lang))
+    _write_content_row(ws, rows["d6"], _build_d6_verification(result, lang))
+    _write_content_row(ws, rows["d7"], _join_lines(preventive, lang))
+    _write_content_row(ws, rows["d8"], _build_d8_recognition(lang))
 
-    for row, content in zip(D4_CAUSE_ROWS, _build_d4_sections(result, lang)):
-        _write_merged_row_ag(ws, row, content)
-
-    _write_merged_row_ag(ws, d8_content_row, _build_d8_recognition(lang))
+    d4_sections = _build_d4_sections(result, lang)
+    _write_content_row(ws, rows["d4_why"], d4_sections[0])
+    _write_d4_fishbone_row(ws, rows["d4_fishbone"], d4_sections[1], fishbone_image)
+    _write_content_row(ws, rows["d4_rules"], d4_sections[2])
+    _write_content_row(ws, rows["d4_root"], d4_sections[3])
 
 
 def _fill_8d_xls_legacy(ws, rb, sh, result, lang: str, analyst_name: str) -> None:
@@ -512,7 +523,14 @@ def _fill_8d_xls_legacy(ws, rb, sh, result, lang: str, analyst_name: str) -> Non
     permanent = result.permanent_actions_zh if lang == "zh" else result.permanent_actions_en
     preventive = result.preventive_actions_zh if lang == "zh" else result.preventive_actions_en
 
-    legacy_rows = {k: (v[0] - 1, v[1]) for k, v in EIGHT_D_SECTIONS.items()}
+    legacy_rows = {
+        "d1": (EXAMPLE_8D_ROWS["d1"] - 1, 1),
+        "d2": (EXAMPLE_8D_ROWS["d2"] - 1, 1),
+        "d3": (EXAMPLE_8D_ROWS["d3"] - 1, 1),
+        "d5": (EXAMPLE_8D_ROWS["d5"] - 1, 1),
+        "d6": (EXAMPLE_8D_ROWS["d6"] - 1, 1),
+        "d7": (EXAMPLE_8D_ROWS["d7"] - 1, 1),
+    }
     _write_value_preserve(ws, rb, sh, 5, 1, project_name)
     _write_value_preserve(ws, rb, sh, 5, 3, project_name)
     _write_value_preserve(ws, rb, sh, 5, 6, product_name)
@@ -531,8 +549,17 @@ def _fill_8d_xls_legacy(ws, rb, sh, result, lang: str, analyst_name: str) -> Non
     for key, content in sections.items():
         row, row_span = legacy_rows[key]
         _write_section_cell(ws, rb, sh, row, row_span, content, force_top=True)
-    _write_section_cell(ws, rb, sh, 18, 2, _build_cause_analysis(result, lang), force_top=True)
-    _write_section_cell(ws, rb, sh, 31, 1, _build_d8_recognition(lang), force_top=True)
+    d4_rows = (
+        EXAMPLE_8D_ROWS["d4_why"] - 1,
+        EXAMPLE_8D_ROWS["d4_fishbone"] - 1,
+        EXAMPLE_8D_ROWS["d4_rules"] - 1,
+        EXAMPLE_8D_ROWS["d4_root"] - 1,
+    )
+    for row, content in zip(d4_rows, _build_d4_sections(result, lang)):
+        _write_section_cell(ws, rb, sh, row, 1, content, force_top=True)
+    _write_section_cell(
+        ws, rb, sh, EXAMPLE_8D_ROWS["d8"] - 1, 1, _build_d8_recognition(lang), force_top=True
+    )
 
 
 def _xlwt_border_line(style: int) -> int:
@@ -600,10 +627,6 @@ def _write_section_cell(
     row_obj = ws.row(row)
     row_obj.height = min(20000, int(height))
     row_obj.height_mismatch = True
-
-
-def _xlwt_border_line(style: int) -> int:
-    return {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}.get(style, 1)
 
 
 def _estimate_row_height(text: str, base: int = 480, per_line: int = 280, chars_per_line: int = 42) -> int:
