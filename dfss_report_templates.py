@@ -18,17 +18,18 @@ from fa_template_profiles import (
 
 TEMPLATE_EXTENSIONS = (".xlsx", ".xls", ".docx")
 
-# 8D 内容区（0-based row/col），两套模板结构一致
-EIGHT_D_CONTENT_ROWS = {
-    "d1": 8,
-    "d2": 11,
-    "d3": 14,
-    "d4": 18,
-    "d5": 22,
-    "d6": 25,
-    "d7": 28,
-    "d8": 31,
+# 8D 内容区（0-based row, row_span）— 与模板合并区域一致
+EIGHT_D_SECTIONS = {
+    "d1": (8, 1),
+    "d2": (11, 1),
+    "d3": (14, 2),
+    "d4": (18, 2),
+    "d5": (22, 1),
+    "d6": (25, 1),
+    "d7": (28, 1),
+    "d8": (31, 1),
 }
+EIGHT_D_CONTENT_COLS = (0, 6)  # inclusive col range for merged content cells
 
 
 def _load_xlrd():
@@ -220,17 +221,51 @@ def _build_d2_problem(result, lang: str) -> str:
     return "\n".join(parts)
 
 
+def _build_association_rules_section(result, lang: str) -> str:
+    rules = getattr(result, "association_rules", None) or []
+    if not rules:
+        return "暂无显著关联规则，建议补充更多现场与历史数据。" if lang == "zh" else "No significant association rules; collect more field/history data."
+
+    lines: List[str] = []
+    for idx, rule in enumerate(rules[:3], 1):
+        if not isinstance(rule, dict):
+            continue
+        antecedents = ", ".join(_clean_text(x) for x in rule.get("antecedents", []) if _clean_text(x))
+        consequents = ", ".join(_clean_text(x) for x in rule.get("consequents", []) if _clean_text(x))
+        explanation = _clean_text(str(rule.get("explanation", "")))
+        confidence = rule.get("confidence", 0)
+        try:
+            conf_text = f"{float(confidence):.0%}"
+        except (TypeError, ValueError):
+            conf_text = str(confidence)
+        if lang == "zh":
+            lines.append(
+                f"{idx}. 若【{antecedents or '条件待补充'}】→【{consequents or '结果待补充'}】"
+                f"（置信度 {conf_text}）：{explanation}"
+            )
+        else:
+            lines.append(
+                f"{idx}. IF [{antecedents or 'TBD'}] -> [{consequents or 'TBD'}] "
+                f"(confidence {conf_text}): {explanation}"
+            )
+    return "\n".join(lines) if lines else ("暂无显著关联规则。" if lang == "zh" else "No significant association rules.")
+
+
 def _build_cause_analysis(result, lang: str) -> str:
     root = _clean_text(result.root_cause_zh if lang == "zh" else result.root_cause_en)
-    parts = [f"根本原因：{root}" if lang == "zh" else f"Root cause: {root}"]
+    sections: List[str] = []
 
+    sections.append("【5-Why 分析】" if lang == "zh" else "[5-Why Analysis]")
     if result.five_why:
-        parts.append("5-Why 分析：" if lang == "zh" else "5-Why analysis:")
+        why_lines: List[str] = []
         for item in result.five_why:
             q = _clean_text(item.question_zh if lang == "zh" else item.question_en)
             a = _clean_text(item.answer_zh if lang == "zh" else item.answer_en)
             if q or a:
-                parts.append(f"Why-{item.level}: {q}\n→ {a}")
+                why_lines.append(f"Why-{item.level}: {q}\n→ {a}")
+        sections.append("\n".join(why_lines))
+    else:
+        sections.append("待补充" if lang == "zh" else "Pending")
 
     fishbone_dict = result.fishbone.to_dict(lang)
     cat_names_zh = {
@@ -241,15 +276,34 @@ def _build_cause_analysis(result, lang: str) -> str:
         "Environment": "环",
         "Measurement": "测",
     }
-    parts.append("鱼骨图（6M）摘要：" if lang == "zh" else "Fishbone (6M) summary:")
+    sections.append("【鱼骨图分析（6M）】" if lang == "zh" else "[Fishbone Analysis (6M)]")
+    fishbone_lines: List[str] = []
     for cat, causes in fishbone_dict.items():
         if not causes:
             continue
         cat_label = cat_names_zh.get(cat, cat) if lang == "zh" else cat
-        cause_text = "；".join(_clean_text(c) for c in causes[:5])
-        parts.append(f"{cat_label}: {cause_text}")
+        cleaned = [_clean_text(c) for c in causes if _clean_text(c)]
+        if cleaned:
+            fishbone_lines.append(f"{cat_label}：")
+            for i, cause in enumerate(cleaned[:6], 1):
+                fishbone_lines.append(f"  {i}. {cause}")
+    sections.append("\n".join(fishbone_lines) if fishbone_lines else ("待补充" if lang == "zh" else "Pending"))
 
-    return "\n\n".join(parts)
+    sections.append("【关联规则挖掘】" if lang == "zh" else "[Association Rule Mining]")
+    sections.append(_build_association_rules_section(result, lang))
+
+    sections.append("【根因结论】" if lang == "zh" else "[Root Cause Conclusion]")
+    conf = getattr(result, "root_cause_confidence", 0) or 0
+    try:
+        conf_text = f"{float(conf):.0%}"
+    except (TypeError, ValueError):
+        conf_text = str(conf)
+    if lang == "zh":
+        sections.append(f"{root}\n（置信度：{conf_text}）")
+    else:
+        sections.append(f"{root}\n(Confidence: {conf_text})")
+
+    return "\n\n".join(sections)
 
 
 def _build_d6_verification(result, lang: str) -> str:
@@ -297,20 +351,83 @@ def _build_d8_recognition(lang: str) -> str:
     )
 
 
+def _xlwt_border_line(style: int) -> int:
+    return {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}.get(style, 1)
+
+
+def _style_from_template_xf(rb, xf_index: int, force_top: bool = True):
+    """Copy template xf (borders/alignment) into an xlwt style."""
+    import xlwt
+
+    xf = rb.xf_list[xf_index]
+    style = xlwt.XFStyle()
+
+    align = xlwt.Alignment()
+    horz_map = {0: xlwt.Alignment.HORZ_GENERAL, 1: xlwt.Alignment.HORZ_LEFT, 2: xlwt.Alignment.HORZ_CENTER, 3: xlwt.Alignment.HORZ_RIGHT}
+    align.horz = horz_map.get(xf.alignment.hor_align, xlwt.Alignment.HORZ_LEFT)
+    if force_top:
+        align.vert = xlwt.Alignment.VERT_TOP
+    else:
+        vert_map = {0: xlwt.Alignment.VERT_TOP, 1: xlwt.Alignment.VERT_CENTER, 2: xlwt.Alignment.VERT_BOTTOM}
+        align.vert = vert_map.get(xf.alignment.vert_align, xlwt.Alignment.VERT_TOP)
+    align.wrap = (
+        xlwt.Alignment.WRAP_AT_RIGHT
+        if xf.alignment.text_wrapped
+        else xlwt.Alignment.NOT_WRAP_AT_RIGHT
+    )
+    style.alignment = align
+
+    borders = xlwt.Borders()
+    b = xf.border
+    borders.left = _xlwt_border_line(b.left_line_style)
+    borders.right = _xlwt_border_line(b.right_line_style)
+    borders.top = _xlwt_border_line(b.top_line_style)
+    borders.bottom = _xlwt_border_line(b.bottom_line_style)
+    style.borders = borders
+    return style
+
+
+def _write_value_preserve(ws, rb, sh, row: int, col: int, value: str, force_top: bool = True) -> None:
+    xf_index = sh.cell(row, col).xf_index
+    style = _style_from_template_xf(rb, xf_index, force_top=force_top)
+    ws.write(row, col, value, style)
+
+
+def _write_section_cell(
+    ws,
+    rb,
+    sh,
+    row: int,
+    row_span: int,
+    text: str,
+    force_top: bool = True,
+) -> None:
+    """Write merged section content preserving template borders and top alignment."""
+    col_start, col_end = EIGHT_D_CONTENT_COLS
+    xf_index = sh.cell(row, col_start).xf_index
+    style = _style_from_template_xf(rb, xf_index, force_top=force_top)
+    row_end = row + max(row_span, 1) - 1
+    if row_span > 1:
+        ws.write_merge(row, row_end, col_start, col_end, text, style)
+    else:
+        ws.write(row, col_start, text, style)
+
+    height = _estimate_row_height(text)
+    row_obj = ws.row(row)
+    row_obj.height = height
+    row_obj.height_mismatch = True
+    for extra_row in range(row + 1, row_end + 1):
+        extra = ws.row(extra_row)
+        extra.height = max(extra.height, height // row_span)
+        extra.height_mismatch = True
+
+
 def _estimate_row_height(text: str, base: int = 480, per_line: int = 280, chars_per_line: int = 42) -> int:
     content = str(text or "")
     line_count = content.count("\n") + 1
     wrapped = sum(max(1, (len(line) + chars_per_line - 1) // chars_per_line) for line in content.splitlines() or [""])
     total_lines = max(line_count, wrapped)
     return min(12000, base + total_lines * per_line)
-
-
-def _write_cell_with_height(ws, row: int, col: int, text: str) -> None:
-    ws.write(row, col, text)
-    height = _estimate_row_height(text)
-    row_obj = ws.row(row)
-    row_obj.height = height
-    row_obj.height_mismatch = True
 
 
 def fill_8d_template(
@@ -329,6 +446,7 @@ def fill_8d_template(
         rb = xlrd.open_workbook(template_path, formatting_info=True)
     wb = _xl_copy(rb)
     ws = wb.get_sheet(0)
+    sh = rb.sheet_by_index(0)
 
     product_name = _clean_text(result.product_name)
     project_name = _clean_text(result.project_name) or product_name
@@ -339,12 +457,12 @@ def fill_8d_template(
     permanent = result.permanent_actions_zh if lang == "zh" else result.permanent_actions_en
     preventive = result.preventive_actions_zh if lang == "zh" else result.preventive_actions_en
 
-    ws.write(5, 1, project_name)
-    ws.write(5, 3, project_name)
-    ws.write(5, 6, product_name)
-    ws.write(6, 1, analyst_name or "-")
-    ws.write(6, 3, stage)
-    ws.write(6, 6, today)
+    _write_value_preserve(ws, rb, sh, 5, 1, project_name)
+    _write_value_preserve(ws, rb, sh, 5, 3, project_name)
+    _write_value_preserve(ws, rb, sh, 5, 6, product_name)
+    _write_value_preserve(ws, rb, sh, 6, 1, analyst_name or "-")
+    _write_value_preserve(ws, rb, sh, 6, 3, stage)
+    _write_value_preserve(ws, rb, sh, 6, 6, today)
 
     sections = {
         "d1": _build_d1_team(result, analyst_name, lang),
@@ -357,7 +475,12 @@ def fill_8d_template(
         "d8": _build_d8_recognition(lang),
     }
     for key, content in sections.items():
-        _write_cell_with_height(ws, EIGHT_D_CONTENT_ROWS[key], 0, content)
+        row, row_span = EIGHT_D_SECTIONS[key]
+        _write_section_cell(ws, rb, sh, row, row_span, content, force_top=True)
+        if key == "d4":
+            row_obj = ws.row(row)
+            row_obj.height = min(16000, _estimate_row_height(content, base=900, per_line=320))
+            row_obj.height_mismatch = True
 
     out = BytesIO()
     wb.save(out)
