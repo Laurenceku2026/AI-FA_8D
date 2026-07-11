@@ -1,6 +1,7 @@
 """Enterprise branding helpers for TechLife child apps."""
 from __future__ import annotations
 
+import html
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import quote
 
@@ -102,20 +103,48 @@ def enterprise_logo_url() -> str:
     return (st.session_state.get("organization_logo_url") or "").strip()
 
 
+def enterprise_brand_markup(org_name: str, logo_url: str | None, *, variant: str = "main") -> str:
+    """Logo left of org name, scaled to text cap-height, with 3ch spacing."""
+    safe_name = html.escape(org_name or "")
+    if variant == "sidebar":
+        wrapper_style = (
+            "display:flex; align-items:center; "
+            "font-size:2.25rem; font-weight:700; line-height:1.2; margin:0 0 0.5rem 0;"
+        )
+    elif variant == "main_compact":
+        wrapper_style = (
+            "display:flex; align-items:center; "
+            "font-size:1.75rem; font-weight:700; line-height:1.2; margin:0 0 0.75rem 0;"
+        )
+    else:
+        wrapper_style = (
+            "display:flex; align-items:center; "
+            "font-size:2.25rem; font-weight:700; line-height:1.2; margin:0 0 1rem 0;"
+        )
+
+    if logo_url:
+        safe_logo = html.escape(logo_url, quote=True)
+        return (
+            f'<div style="{wrapper_style}">'
+            f'<img src="{safe_logo}" alt="" '
+            f'style="height:1em; width:auto; object-fit:contain; flex-shrink:0;" />'
+            f'<span style="margin-left:3ch; white-space:nowrap;">{safe_name}</span>'
+            f"</div>"
+        )
+    return f'<div style="{wrapper_style}">{safe_name}</div>'
+
+
 def render_enterprise_sidebar_brand() -> None:
     if not is_enterprise_user():
         return
     org_name = enterprise_display_name()
     logo_url = enterprise_logo_url()
-    if logo_url:
-        col_logo, col_name = st.columns([1, 4])
-        with col_logo:
-            st.image(logo_url, width=40)
-        with col_name:
-            if org_name:
-                st.markdown(f"### {org_name}")
-    elif org_name:
-        st.markdown(f"### {org_name}")
+    if not org_name and not logo_url:
+        return
+    st.markdown(
+        enterprise_brand_markup(org_name, logo_url or None, variant="sidebar"),
+        unsafe_allow_html=True,
+    )
 
 
 def render_enterprise_main_brand() -> None:
@@ -125,12 +154,7 @@ def render_enterprise_main_brand() -> None:
     logo_url = enterprise_logo_url()
     if not org_name and not logo_url:
         return
-    if logo_url:
-        col_logo, col_name = st.columns([1, 10])
-        with col_logo:
-            st.image(logo_url, width=52)
-        with col_name:
-            if org_name:
-                st.markdown(f"## {org_name}")
-    elif org_name:
-        st.markdown(f"## {org_name}")
+    st.markdown(
+        enterprise_brand_markup(org_name, logo_url or None, variant="main_compact"),
+        unsafe_allow_html=True,
+    )
