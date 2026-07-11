@@ -32,6 +32,16 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import fontManager
 
+from portal_enterprise_ui import (
+    apply_portal_token,
+    ensure_enterprise_session_defaults,
+    is_enterprise_user,
+    load_enterprise_branding,
+    qp_first,
+    render_enterprise_main_brand,
+    render_enterprise_sidebar_brand,
+)
+
 # ==================== 配置（从 Streamlit Secrets 读取）====================
 
 def get_secret(key: str, default: str = "") -> str:
@@ -886,15 +896,6 @@ KB_CATEGORY_HEADERS = [
 ]
 
 from knowledge_base_utils import SupabaseKnowledgeDB
-from portal_enterprise_ui import (
-    apply_portal_token,
-    ensure_enterprise_session_defaults,
-    is_enterprise_user,
-    load_enterprise_branding,
-    qp_first,
-    render_enterprise_main_brand,
-    render_enterprise_sidebar_brand,
-)
 from web_search_utils import web_search_dual as shared_web_search_dual
 from dfss_report_templates import export_report_template
 from fa_template_profiles import (
