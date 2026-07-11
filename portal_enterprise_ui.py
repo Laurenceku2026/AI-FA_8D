@@ -104,7 +104,7 @@ def enterprise_logo_url() -> str:
 
 
 def enterprise_brand_markup(org_name: str, logo_url: str | None, *, variant: str = "main") -> str:
-    """Logo left of org name, scaled to text cap-height, with 3ch spacing."""
+    """Logo left of org name, scaled to text cap-height, with 2ch spacing."""
     safe_name = html.escape(org_name or "")
     if variant == "sidebar":
         wrapper_style = (
@@ -128,7 +128,7 @@ def enterprise_brand_markup(org_name: str, logo_url: str | None, *, variant: str
             f'<div style="{wrapper_style}">'
             f'<img src="{safe_logo}" alt="" '
             f'style="height:1em; width:auto; object-fit:contain; flex-shrink:0;" />'
-            f'<span style="margin-left:3ch; white-space:nowrap;">{safe_name}</span>'
+            f'<span style="margin-left:2ch; white-space:nowrap;">{safe_name}</span>'
             f"</div>"
         )
     return f'<div style="{wrapper_style}">{safe_name}</div>'
