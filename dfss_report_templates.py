@@ -450,12 +450,43 @@ def _build_d8_recognition(lang: str) -> str:
     )
 
 
-def _estimate_openpyxl_row_height(text: str, min_height: float = 15.0, chars_per_line: int = 52) -> float:
+def _line_display_width(text: str) -> int:
+    """CJK-aware display width for Excel wrap estimation."""
+    width = 0
+    for ch in str(text or ""):
+        width += 2 if ord(ch) > 127 else 1
+    return width
+
+
+def _merged_col_units(ws, col_start: int, col_end: int) -> float:
+    from openpyxl.utils import get_column_letter
+
+    total = 0.0
+    for col in range(col_start, col_end + 1):
+        letter = get_column_letter(col)
+        total += float(ws.column_dimensions[letter].width or 8.43)
+    return total
+
+
+def _estimate_openpyxl_row_height(
+    text: str,
+    min_height: float = 15.0,
+    chars_per_line: int = 52,
+    ws=None,
+    col_start: int = 1,
+    col_end: int = 7,
+) -> float:
     content = str(text or "")
+    if ws is not None:
+        chars_per_line = max(24, int(_merged_col_units(ws, col_start, col_end) * 0.95))
     line_count = content.count("\n") + 1
-    wrapped = sum(max(1, (len(line) + chars_per_line - 1) // chars_per_line) for line in content.splitlines() or [""])
+    wrapped = 0
+    for line in content.splitlines() or [""]:
+        width = max(1, _line_display_width(line))
+        wrapped += max(1, (width + chars_per_line - 1) // chars_per_line)
     total_lines = max(line_count, wrapped)
-    return min(409.0, max(min_height, 16.0 + total_lines * 13.5))
+    # Extra padding avoids Excel showing ##### when wrapped text exceeds row height.
+    return min(409.0, max(min_height, 18.0 + total_lines * 15.5))
 
 
 def _top_alignment():
@@ -474,10 +505,16 @@ def _write_content_row(ws, row: int, text: str, chars_per_line: int = 52) -> Non
     """写入 A~G 合并内容行（不改动模板已有合并）。"""
     cell = ws.cell(row=row, column=D4_COL_START)
     cell.value = text
+    cell.number_format = "General"
     cell.alignment = _top_alignment()
     min_height = float(ws.row_dimensions[row].height or 18.0)
     ws.row_dimensions[row].height = _estimate_openpyxl_row_height(
-        text, min_height=min_height, chars_per_line=chars_per_line
+        text,
+        min_height=min_height,
+        chars_per_line=chars_per_line,
+        ws=ws,
+        col_start=D4_COL_START,
+        col_end=D4_COL_END,
     )
 
 
@@ -548,8 +585,11 @@ def _write_d4_fishbone_row(ws, row: int, text: str, image_bytes: Optional[bytes]
     """R19：A:B 文字 + C:G 鱼骨图。"""
     cell = ws.cell(row=row, column=D4_COL_START)
     cell.value = text
+    cell.number_format = "General"
     cell.alignment = _top_alignment()
-    text_height = _estimate_openpyxl_row_height(text, min_height=18.0, chars_per_line=28)
+    text_height = _estimate_openpyxl_row_height(
+        text, min_height=18.0, ws=ws, col_start=D4_COL_START, col_end=2
+    )
     image_height = FISHBONE_ROW_MIN_HEIGHT if image_bytes else 0.0
     ws.row_dimensions[row].height = max(text_height, image_height, float(ws.row_dimensions[row].height or 0))
     _insert_fishbone_image(ws, row, image_bytes)
