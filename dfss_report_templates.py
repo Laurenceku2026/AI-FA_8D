@@ -9,8 +9,10 @@ from typing import List, Optional, Tuple
 
 from fa_template_profiles import (
     DEFAULT_8D_TEMPLATE_FILENAME,
+    DEFAULT_8D_TEMPLATE_FILENAME_EN,
     EIGHT_D_TEMPLATE_FILENAME,
     TEMPLATE1_8D_FILENAME,
+    TEMPLATE1_8D_FILENAME_EN,
     TEMPLATE_MODE_CUSTOM,
     TEMPLATE_MODE_DEFAULT,
     resolve_profile_template_filename,
@@ -61,7 +63,12 @@ def list_report_templates(app_key: str = "AI-FA") -> List[str]:
         os.path.join(r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template", app_key),
     ]
     found: List[str] = []
-    for preferred in (DEFAULT_8D_TEMPLATE_FILENAME, TEMPLATE1_8D_FILENAME):
+    for preferred in (
+        DEFAULT_8D_TEMPLATE_FILENAME,
+        DEFAULT_8D_TEMPLATE_FILENAME_EN,
+        TEMPLATE1_8D_FILENAME,
+        TEMPLATE1_8D_FILENAME_EN,
+    ):
         try:
             resolve_template_path(preferred, app_key)
             if preferred not in found:
@@ -113,7 +120,11 @@ def export_report_template(
         )
         return data, template_mime_type(name)
 
-    filename = template_filename or resolve_profile_template_filename(template_mode) or DEFAULT_8D_TEMPLATE_FILENAME
+    filename = (
+        template_filename
+        or resolve_profile_template_filename(template_mode, lang)
+        or (DEFAULT_8D_TEMPLATE_FILENAME_EN if lang == "en" else DEFAULT_8D_TEMPLATE_FILENAME)
+    )
     lower_name = filename.lower()
     if lower_name.endswith(".xls") or lower_name.endswith(".xlsx"):
         if "8d" in lower_name or "qeop" in lower_name:
@@ -162,10 +173,15 @@ def resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
         markers = []
         if "默认" in filename or "default" in filename.lower():
             markers = ["默认", "8d"]
+            en_markers = ["default", "8d"]
         elif "模板1" in filename or "template" in filename.lower() or "example" in filename.lower():
             markers = ["模板1", "8d"]
+            en_markers = ["template-1", "8d"]
         else:
             markers = ["8d"]
+            en_markers = ["8d"]
+        use_en = "default-8d" in filename.lower() or "template-1-8d" in filename.lower()
+        active_markers = en_markers if use_en else markers
         example_path = os.path.join(
             r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template",
             app_key,
@@ -177,14 +193,14 @@ def resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
             lower = name.lower()
             if not lower.endswith((".xls", ".xlsx")):
                 continue
-            if markers and all(m.lower() in lower or m in name for m in markers):
+            if active_markers and all(m.lower() in lower or m in name for m in active_markers):
                 if lower.endswith(".xlsx"):
                     return os.path.join(templates_dir, name)
         for name in os.listdir(templates_dir):
             lower = name.lower()
             if not lower.endswith((".xls", ".xlsx")):
                 continue
-            if markers and all(m.lower() in lower or m in name for m in markers):
+            if active_markers and all(m.lower() in lower or m in name for m in active_markers):
                 return os.path.join(templates_dir, name)
 
     raise FileNotFoundError(f"8D template not found: {filename}")

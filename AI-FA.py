@@ -868,7 +868,9 @@ from web_search_utils import web_search_dual as shared_web_search_dual
 from dfss_report_templates import export_report_template
 from fa_template_profiles import (
     DEFAULT_8D_TEMPLATE_FILENAME,
+    DEFAULT_8D_TEMPLATE_FILENAME_EN,
     TEMPLATE1_8D_FILENAME,
+    TEMPLATE1_8D_FILENAME_EN,
     TEMPLATE_MODE_CUSTOM,
     TEMPLATE_MODE_DEFAULT,
     TEMPLATE_MODE_TEMPLATE1,
@@ -2455,14 +2457,18 @@ def main():
                     else f"Current template: custom ({selected_template})"
                 )
             elif template_mode == TEMPLATE_MODE_TEMPLATE1:
-                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_TEMPLATE1) or TEMPLATE1_8D_FILENAME
+                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_TEMPLATE1, lang) or (
+                    TEMPLATE1_8D_FILENAME_EN if lang == "en" else TEMPLATE1_8D_FILENAME
+                )
                 template_caption = (
                     f"当前模板：{get_template_profile_label(TEMPLATE_MODE_TEMPLATE1, lang)}（{selected_template}）"
                     if lang == "zh"
                     else f"Current template: {get_template_profile_label(TEMPLATE_MODE_TEMPLATE1, lang)} ({selected_template})"
                 )
             else:
-                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_DEFAULT) or DEFAULT_8D_TEMPLATE_FILENAME
+                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_DEFAULT, lang) or (
+                    DEFAULT_8D_TEMPLATE_FILENAME_EN if lang == "en" else DEFAULT_8D_TEMPLATE_FILENAME
+                )
                 template_caption = (
                     f"当前模板：{get_template_profile_label(TEMPLATE_MODE_DEFAULT, lang)}（{selected_template}）"
                     if lang == "zh"
@@ -2483,9 +2489,10 @@ def main():
                         else None,
                     )
                     ext = os.path.splitext(selected_template)[1] or ".xlsx"
+                    suffix = "模板" if lang == "zh" else "Template"
                     st.session_state.fa_template_download = {
                         "data": template_bytes.getvalue(),
-                        "name": f"{result.product_name}_{title_summary}_模板_{datetime.now().strftime('%Y%m%d')}{ext}",
+                        "name": f"{result.product_name}_{title_summary}_{suffix}_{datetime.now().strftime('%Y%m%d')}{ext}",
                         "mime": template_mime,
                     }
                 except Exception as exc:
