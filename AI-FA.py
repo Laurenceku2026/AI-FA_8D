@@ -23,6 +23,7 @@ import re
 import textwrap
 from typing import Tuple
 import requests
+import jwt
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
@@ -79,6 +80,13 @@ st.set_page_config(
 query_params = st.query_params
 
 
+def _qp_first(key: str) -> str:
+    val = query_params.get(key)
+    if isinstance(val, list):
+        return val[0] if val else ""
+    return val or ""
+
+
 def set_app_language(lang: str):
     """同步 session 与 URL 语言，避免 query_params 在 rerun 时覆盖用户选择。"""
     if lang not in ("zh", "en"):
@@ -87,14 +95,51 @@ def set_app_language(lang: str):
     st.query_params["lang"] = lang
 
 
-if "user_id" in query_params:
+def _apply_portal_token() -> None:
+    token = _qp_first("token")
+    secret = st.secrets.get("JWT_SECRET_KEY")
+    if not token or not secret:
+        return
+    try:
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return
+
+    if payload.get("sub"):
+        st.session_state.user_id = payload["sub"]
+    if payload.get("email"):
+        st.session_state.user_email = payload["email"]
+        if "@" in payload["email"]:
+            st.session_state.username = payload["email"].split("@")[0]
+    if payload.get("organization_id"):
+        st.session_state.organization_id = payload["organization_id"]
+    if payload.get("organization_name"):
+        st.session_state.organization_name = payload["organization_name"]
+    if payload.get("org_role"):
+        st.session_state.org_role = payload["org_role"]
+    if payload.get("trials_left") is not None and "trials_left" not in st.session_state:
+        try:
+            st.session_state.trials_left = int(payload["trials_left"])
+        except (TypeError, ValueError):
+            pass
+    if "lang" not in st.session_state and payload.get("lang") in ("zh", "en"):
+        set_app_language(payload["lang"])
+
+
+if "organization_id" not in st.session_state:
+    st.session_state.organization_id = None
+
+if "user_id" in query_params or _qp_first("token"):
     # 获取 user_id
-    user_id_val = query_params["user_id"]
-    if isinstance(user_id_val, list):
-        st.session_state.user_id = user_id_val[0]
-    else:
-        st.session_state.user_id = user_id_val
-    
+    user_id_val = query_params.get("user_id")
+    if user_id_val is not None:
+        if isinstance(user_id_val, list):
+            st.session_state.user_id = user_id_val[0]
+        else:
+            st.session_state.user_id = user_id_val
+
+    _apply_portal_token()
+
     # 获取 email
     email_val = query_params.get("email", "")
     if isinstance(email_val, list):
@@ -124,6 +169,10 @@ if "user_id" in query_params:
         if isinstance(trials_val, list):
             trials_val = trials_val[0]
         st.session_state.trials_left = int(trials_val)
+
+    if not st.session_state.get("user_id"):
+        st.warning("请从 TechLife Suite 门户登录后访问")
+        st.stop()
 else:
     st.warning("请从 TechLife Suite 门户登录后访问")
     st.stop()
@@ -863,7 +912,11 @@ def web_search_dual(query: str, lang: str) -> str:
     )
 
 
-from knowledge_base_utils import SupabaseKnowledgeDB
+from knowledge_base_utils import (
+    KB_CATEGORY_HEADERS,
+    KNOWLEDGE_CATEGORIES,
+    SupabaseKnowledgeDB,
+)
 from web_search_utils import web_search_dual as shared_web_search_dual
 from dfss_report_templates import export_report_template
 from fa_template_profiles import (
@@ -896,14 +949,35 @@ def _resolve_template_for_lang(mode: str, lang: str) -> str:
         return resolve_profile_template_filename(mode) or profile_template_filename(mode, lang)
 
 
-def create_supabase_knowledge_db() -> SupabaseKnowledgeDB:
+def create_supabase_knowledge_db(
+    *,
+    kb_scope: str = "platform",
+    include_tenant_kb: bool = True,
+) -> SupabaseKnowledgeDB:
+    org_id = st.session_state.get("organization_id")
     return SupabaseKnowledgeDB(
         SUPABASE_URL,
         SUPABASE_SERVICE_ROLE_KEY,
         translate_to_en=translate_to_en,
         translate_to_zh=translate_to_zh,
         ui_lang_getter=lambda: st.session_state.get("lang", "zh"),
+        organization_id=org_id,
+        kb_scope=kb_scope,
+        include_tenant_kb=include_tenant_kb and bool(org_id),
     )
+
+
+def create_platform_admin_knowledge_db() -> SupabaseKnowledgeDB:
+    return create_supabase_knowledge_db(kb_scope="platform", include_tenant_kb=False)
+
+
+def get_runtime_knowledge_db() -> SupabaseKnowledgeDB:
+    org_id = st.session_state.get("organization_id")
+    cached_org = st.session_state.get("_kb_org_id")
+    if "knowledge_db" not in st.session_state or cached_org != org_id:
+        st.session_state.knowledge_db = create_supabase_knowledge_db()
+        st.session_state._kb_org_id = org_id
+    return st.session_state.knowledge_db
 
 
 # ==================== 管理员弹窗 ====================
@@ -951,14 +1025,11 @@ def admin_settings_dialog():
     # 知识库管理
     st.subheader(get_text("knowledge_base_title"))
     
-    if "knowledge_db" not in st.session_state:
-        st.session_state.knowledge_db = create_supabase_knowledge_db()
-    
-    kb = st.session_state.knowledge_db
-    categories = kb.categories
+    platform_kb = create_platform_admin_knowledge_db()
+    categories = KNOWLEDGE_CATEGORIES
     
     selected_cat = st.selectbox(get_text("category"), categories)
-    items = kb.get_knowledge(selected_cat, lang)
+    items = platform_kb.get_knowledge(selected_cat, lang)
     
     st.write(f"共 {len(items)} 条记录")
     
@@ -971,7 +1042,8 @@ def admin_settings_dialog():
                     st.write(f"{idx+1}. {display_item}")
                 with col2:
                     if st.button("❌", key=f"del_{selected_cat}_{idx}"):
-                        kb.delete_knowledge(selected_cat, item)
+                        platform_kb.delete_knowledge(selected_cat, item)
+                        get_runtime_knowledge_db()._load_cache()
                         st.rerun()
     else:
         st.info(get_text("no_entries"))
@@ -980,7 +1052,8 @@ def admin_settings_dialog():
                             placeholder=get_text("entry_placeholder"))
     if st.button(get_text("add_entry")):
         if new_item.strip():
-            kb.add_knowledge(selected_cat, new_item.strip())
+            platform_kb.add_knowledge(selected_cat, new_item.strip())
+            get_runtime_knowledge_db()._load_cache()
             st.rerun()
     
     st.markdown("---")
@@ -991,7 +1064,8 @@ def admin_settings_dialog():
     with col_exp:
         st.markdown(f"**{get_text('export_kb')}**")
         if st.button("📥 " + get_text("export_kb"), key="export_btn"):
-            df = kb.export_to_dataframe()
+            df = platform_kb.export_to_dataframe()
+            df.columns = KB_CATEGORY_HEADERS
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name="KnowledgeBase", index=False)
@@ -1007,8 +1081,8 @@ def admin_settings_dialog():
         uploaded = st.file_uploader("选择Excel文件", type=["xlsx", "xls"], key="kb_upload")
         if uploaded:
             try:
-                df = pd.read_excel(uploaded)
-                count = kb.import_from_dataframe(df)
+                count = platform_kb.import_from_excel_bytes(uploaded.getvalue())
+                get_runtime_knowledge_db()._load_cache()
                 st.success(get_text("import_success").format(count=count))
                 st.rerun()
             except Exception as e:
@@ -1981,7 +2055,7 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     # 2. 双语检索（中文优先，英文补充）
     context_parts = []
     
-    kb = create_supabase_knowledge_db()
+    kb = get_runtime_knowledge_db()
     kb_all = kb.search_knowledge_full(symptom, limit=10)
     kb_results_zh = [r for r in kb_all if is_chinese(r)]
     kb_results_en = [r for r in kb_all if r not in kb_results_zh]
