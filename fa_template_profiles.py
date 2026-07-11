@@ -4,25 +4,31 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-MODULE_VERSION = "20260711b"
+MODULE_VERSION = "20260711c"
 
 # Plain filenames — no filesystem access at import time (Cloud-safe).
 DEFAULT_8D_TEMPLATE_FILENAME = "默认-8D报告.xlsx"
-DEFAULT_8D_TEMPLATE_FILENAME_EN = "Default-8D-Report.xlsx"
+# English shells strictly follow local English_Example_8D.xlsx layout.
+ENGLISH_8D_TEMPLATE_FILENAME = "English_Example_8D.xlsx"
+DEFAULT_8D_TEMPLATE_FILENAME_EN = ENGLISH_8D_TEMPLATE_FILENAME
 TEMPLATE1_8D_FILENAME = "模板1-8D报告.xlsx"
-TEMPLATE1_8D_FILENAME_EN = "Template-1-8D-Report.xlsx"
+TEMPLATE1_8D_TEMPLATE_FILENAME_EN = ENGLISH_8D_TEMPLATE_FILENAME
+# Legacy auto-translated shells (fallback only)
+LEGACY_DEFAULT_8D_TEMPLATE_FILENAME_EN = "Default-8D-Report.xlsx"
+LEGACY_TEMPLATE1_8D_FILENAME_EN = "Template-1-8D-Report.xlsx"
+TEMPLATE1_8D_FILENAME_EN = TEMPLATE1_8D_TEMPLATE_FILENAME_EN
 EIGHT_D_TEMPLATE_FILENAME = DEFAULT_8D_TEMPLATE_FILENAME  # legacy alias
 
 TEMPLATE_PROFILES: Dict[str, Dict[str, Any]] = {
     "default": {
         "filename": DEFAULT_8D_TEMPLATE_FILENAME,
-        "filename_en": DEFAULT_8D_TEMPLATE_FILENAME_EN,
+        "filename_en": ENGLISH_8D_TEMPLATE_FILENAME,
         "label_zh": "默认 8D 模板",
         "label_en": "Default 8D template",
     },
     "template1": {
         "filename": TEMPLATE1_8D_FILENAME,
-        "filename_en": TEMPLATE1_8D_FILENAME_EN,
+        "filename_en": ENGLISH_8D_TEMPLATE_FILENAME,
         "label_zh": "模板-1",
         "label_en": "Template-1",
     },
@@ -35,6 +41,17 @@ TEMPLATE_MODE_CUSTOM = "custom"
 
 def _resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
     here = os.path.dirname(os.path.abspath(__file__))
+    english_example = os.path.join(
+        r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template",
+        app_key,
+        "English_Example_8D.xlsx",
+    )
+    if filename in (
+        ENGLISH_8D_TEMPLATE_FILENAME,
+        DEFAULT_8D_TEMPLATE_FILENAME_EN,
+        TEMPLATE1_8D_TEMPLATE_FILENAME_EN,
+    ) and os.path.isfile(english_example):
+        return english_example
     candidates = [
         os.path.join(here, "templates", filename),
         os.path.join(os.environ.get("DFSS_TEMPLATE_DIR", ""), app_key, filename),

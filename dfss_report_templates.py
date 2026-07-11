@@ -21,8 +21,8 @@ try:
 except ImportError:  # older deployed profile module
     def profile_template_filename(mode: str, lang: str = "zh") -> str:
         names = {
-            "default": ("默认-8D报告.xlsx", "Default-8D-Report.xlsx"),
-            "template1": ("模板1-8D报告.xlsx", "Template-1-8D-Report.xlsx"),
+            "default": ("默认-8D报告.xlsx", "English_Example_8D.xlsx"),
+            "template1": ("模板1-8D报告.xlsx", "English_Example_8D.xlsx"),
         }
         zh_name, en_name = names.get(mode, ("", ""))
         return en_name if lang == "en" else zh_name
@@ -84,6 +84,7 @@ def list_report_templates(app_key: str = "AI-FA") -> List[str]:
         profile_template_filename("default", "en"),
         profile_template_filename("template1", "zh"),
         profile_template_filename("template1", "en"),
+        "English_Example_8D.xlsx",
     ):
         if not preferred:
             continue
@@ -141,7 +142,7 @@ def export_report_template(
     filename = (
         template_filename
         or _resolve_template_for_lang(template_mode, lang)
-        or (DEFAULT_8D_TEMPLATE_FILENAME if lang == "zh" else "Default-8D-Report.xlsx")
+        or (DEFAULT_8D_TEMPLATE_FILENAME if lang == "zh" else "English_Example_8D.xlsx")
     )
     lower_name = filename.lower()
     if lower_name.endswith(".xls") or lower_name.endswith(".xlsx"):
@@ -162,6 +163,20 @@ def export_report_template(
 
 def resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
     here = os.path.dirname(os.path.abspath(__file__))
+    english_example_paths = [
+        os.path.join(here, "templates", "English_Example_8D.xlsx"),
+        os.path.join(
+            r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template",
+            app_key,
+            "English_Example_8D.xlsx",
+        ),
+    ]
+    lower_filename = filename.lower()
+    if "english_example" in lower_filename or lower_filename.startswith("english"):
+        for path in english_example_paths:
+            if path and os.path.isfile(path):
+                return path
+
     names = [filename]
     if filename.lower().endswith(".xls"):
         names.insert(0, filename[:-4] + ".xlsx")
@@ -192,13 +207,22 @@ def resolve_template_path(filename: str, app_key: str = "AI-FA") -> str:
         if "默认" in filename or "default" in filename.lower():
             markers = ["默认", "8d"]
             en_markers = ["default", "8d"]
-        elif "模板1" in filename or "template" in filename.lower() or "example" in filename.lower():
+        elif (
+            "模板1" in filename
+            or "template" in filename.lower()
+            or "example" in filename.lower()
+            or "english" in filename.lower()
+        ):
             markers = ["模板1", "8d"]
-            en_markers = ["template-1", "8d"]
+            en_markers = ["english_example", "8d"]
         else:
             markers = ["8d"]
             en_markers = ["8d"]
-        use_en = "default-8d" in filename.lower() or "template-1-8d" in filename.lower()
+        use_en = (
+            "default-8d" in filename.lower()
+            or "template-1-8d" in filename.lower()
+            or "english_example" in filename.lower()
+        )
         active_markers = en_markers if use_en else markers
         example_path = os.path.join(
             r"C:\Users\Laurence\Technical\Project\SaaS\DFSS Report Template",

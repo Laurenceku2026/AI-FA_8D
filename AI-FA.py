@@ -882,8 +882,8 @@ try:
 except ImportError:  # older deployed profile module
     def profile_template_filename(mode: str, lang: str = "zh") -> str:
         names = {
-            "default": ("默认-8D报告.xlsx", "Default-8D-Report.xlsx"),
-            "template1": ("模板1-8D报告.xlsx", "Template-1-8D-Report.xlsx"),
+            "default": ("默认-8D报告.xlsx", "English_Example_8D.xlsx"),
+            "template1": ("模板1-8D报告.xlsx", "English_Example_8D.xlsx"),
         }
         zh_name, en_name = names.get(mode, ("", ""))
         return en_name if lang == "en" else zh_name
