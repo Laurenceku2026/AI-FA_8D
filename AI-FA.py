@@ -868,9 +868,7 @@ from web_search_utils import web_search_dual as shared_web_search_dual
 from dfss_report_templates import export_report_template
 from fa_template_profiles import (
     DEFAULT_8D_TEMPLATE_FILENAME,
-    DEFAULT_8D_TEMPLATE_FILENAME_EN,
     TEMPLATE1_8D_FILENAME,
-    TEMPLATE1_8D_FILENAME_EN,
     TEMPLATE_MODE_CUSTOM,
     TEMPLATE_MODE_DEFAULT,
     TEMPLATE_MODE_TEMPLATE1,
@@ -878,6 +876,24 @@ from fa_template_profiles import (
     list_template_mode_options,
     resolve_profile_template_filename,
 )
+
+try:
+    from fa_template_profiles import profile_template_filename
+except ImportError:  # older deployed profile module
+    def profile_template_filename(mode: str, lang: str = "zh") -> str:
+        names = {
+            "default": ("默认-8D报告.xlsx", "Default-8D-Report.xlsx"),
+            "template1": ("模板1-8D报告.xlsx", "Template-1-8D-Report.xlsx"),
+        }
+        zh_name, en_name = names.get(mode, ("", ""))
+        return en_name if lang == "en" else zh_name
+
+
+def _resolve_template_for_lang(mode: str, lang: str) -> str:
+    try:
+        return resolve_profile_template_filename(mode, lang) or profile_template_filename(mode, lang)
+    except TypeError:
+        return resolve_profile_template_filename(mode) or profile_template_filename(mode, lang)
 
 
 def create_supabase_knowledge_db() -> SupabaseKnowledgeDB:
@@ -2457,18 +2473,14 @@ def main():
                     else f"Current template: custom ({selected_template})"
                 )
             elif template_mode == TEMPLATE_MODE_TEMPLATE1:
-                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_TEMPLATE1, lang) or (
-                    TEMPLATE1_8D_FILENAME_EN if lang == "en" else TEMPLATE1_8D_FILENAME
-                )
+                selected_template = _resolve_template_for_lang(TEMPLATE_MODE_TEMPLATE1, lang) or TEMPLATE1_8D_FILENAME
                 template_caption = (
                     f"当前模板：{get_template_profile_label(TEMPLATE_MODE_TEMPLATE1, lang)}（{selected_template}）"
                     if lang == "zh"
                     else f"Current template: {get_template_profile_label(TEMPLATE_MODE_TEMPLATE1, lang)} ({selected_template})"
                 )
             else:
-                selected_template = resolve_profile_template_filename(TEMPLATE_MODE_DEFAULT, lang) or (
-                    DEFAULT_8D_TEMPLATE_FILENAME_EN if lang == "en" else DEFAULT_8D_TEMPLATE_FILENAME
-                )
+                selected_template = _resolve_template_for_lang(TEMPLATE_MODE_DEFAULT, lang) or DEFAULT_8D_TEMPLATE_FILENAME
                 template_caption = (
                     f"当前模板：{get_template_profile_label(TEMPLATE_MODE_DEFAULT, lang)}（{selected_template}）"
                     if lang == "zh"

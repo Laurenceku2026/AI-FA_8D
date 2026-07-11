@@ -9,14 +9,30 @@ from typing import List, Optional, Tuple
 
 from fa_template_profiles import (
     DEFAULT_8D_TEMPLATE_FILENAME,
-    DEFAULT_8D_TEMPLATE_FILENAME_EN,
     EIGHT_D_TEMPLATE_FILENAME,
     TEMPLATE1_8D_FILENAME,
-    TEMPLATE1_8D_FILENAME_EN,
     TEMPLATE_MODE_CUSTOM,
     TEMPLATE_MODE_DEFAULT,
     resolve_profile_template_filename,
 )
+
+try:
+    from fa_template_profiles import profile_template_filename
+except ImportError:  # older deployed profile module
+    def profile_template_filename(mode: str, lang: str = "zh") -> str:
+        names = {
+            "default": ("默认-8D报告.xlsx", "Default-8D-Report.xlsx"),
+            "template1": ("模板1-8D报告.xlsx", "Template-1-8D-Report.xlsx"),
+        }
+        zh_name, en_name = names.get(mode, ("", ""))
+        return en_name if lang == "en" else zh_name
+
+
+def _resolve_template_for_lang(mode: str, lang: str) -> Optional[str]:
+    try:
+        return resolve_profile_template_filename(mode, lang) or profile_template_filename(mode, lang)
+    except TypeError:
+        return resolve_profile_template_filename(mode) or profile_template_filename(mode, lang)
 
 TEMPLATE_EXTENSIONS = (".xlsx", ".xls", ".docx")
 
@@ -64,11 +80,13 @@ def list_report_templates(app_key: str = "AI-FA") -> List[str]:
     ]
     found: List[str] = []
     for preferred in (
-        DEFAULT_8D_TEMPLATE_FILENAME,
-        DEFAULT_8D_TEMPLATE_FILENAME_EN,
-        TEMPLATE1_8D_FILENAME,
-        TEMPLATE1_8D_FILENAME_EN,
+        profile_template_filename("default", "zh"),
+        profile_template_filename("default", "en"),
+        profile_template_filename("template1", "zh"),
+        profile_template_filename("template1", "en"),
     ):
+        if not preferred:
+            continue
         try:
             resolve_template_path(preferred, app_key)
             if preferred not in found:
@@ -122,8 +140,8 @@ def export_report_template(
 
     filename = (
         template_filename
-        or resolve_profile_template_filename(template_mode, lang)
-        or (DEFAULT_8D_TEMPLATE_FILENAME_EN if lang == "en" else DEFAULT_8D_TEMPLATE_FILENAME)
+        or _resolve_template_for_lang(template_mode, lang)
+        or (DEFAULT_8D_TEMPLATE_FILENAME if lang == "zh" else "Default-8D-Report.xlsx")
     )
     lower_name = filename.lower()
     if lower_name.endswith(".xls") or lower_name.endswith(".xlsx"):
