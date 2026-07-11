@@ -128,6 +128,17 @@ def _apply_portal_token() -> None:
 
 if "organization_id" not in st.session_state:
     st.session_state.organization_id = None
+if "organization_name" not in st.session_state:
+    st.session_state.organization_name = ""
+
+
+def is_enterprise_user() -> bool:
+    return bool(st.session_state.get("organization_id"))
+
+
+def enterprise_display_name() -> str:
+    return (st.session_state.get("organization_name") or "").strip()
+
 
 if "user_id" in query_params or _qp_first("token"):
     # 获取 user_id
@@ -281,22 +292,25 @@ def consume_trial(user_id: str, app_name: str, action_name: str) -> tuple:
 def render_sidebar_user_info():
     """渲染侧边栏用户信息和剩余次数（实时查询）"""
     with st.sidebar:
-        # 显示用户名
+        if is_enterprise_user():
+            org_name = enterprise_display_name()
+            if org_name:
+                st.markdown(f"### 🏢 {org_name}")
         st.markdown(f"### 👤 {st.session_state.username}")
-        
-        # 实时查询剩余次数
-        remaining, tier, expires_at, error = get_user_remaining_trials(st.session_state.user_id)
-        
-        if error:
-            st.error(error)
-        else:
-            if tier == "pro":
-                st.info("🎫 剩余免费次数: ∞ (专业版)")
-                if expires_at:
-                    st.caption(f"📅 到期: {expires_at[:10]}")
+
+        if not is_enterprise_user():
+            remaining, tier, expires_at, error = get_user_remaining_trials(st.session_state.user_id)
+
+            if error:
+                st.error(error)
             else:
-                st.info(f"🎫 剩余免费次数: {remaining}")
-        
+                if tier == "pro":
+                    st.info("🎫 剩余免费次数: ∞ (专业版)")
+                    if expires_at:
+                        st.caption(f"📅 到期: {expires_at[:10]}")
+                else:
+                    st.info(f"🎫 剩余免费次数: {remaining}")
+
         st.markdown("---")
 
 
@@ -912,11 +926,18 @@ def web_search_dual(query: str, lang: str) -> str:
     )
 
 
-from knowledge_base_utils import (
-    KB_CATEGORY_HEADERS,
-    KNOWLEDGE_CATEGORIES,
-    SupabaseKnowledgeDB,
-)
+KNOWLEDGE_CATEGORIES = ["光学", "机械", "材料", "热学", "电气", "控制", "其他"]
+KB_CATEGORY_HEADERS = [
+    "光学 / Optical",
+    "机械 / Mechanical",
+    "材料 / Material",
+    "热学 / Thermal",
+    "电气 / Electrical",
+    "控制 / Control",
+    "其他 / Other",
+]
+
+from knowledge_base_utils import SupabaseKnowledgeDB
 from web_search_utils import web_search_dual as shared_web_search_dual
 from dfss_report_templates import export_report_template
 from fa_template_profiles import (
@@ -2221,8 +2242,9 @@ def main():
             st.error(f"❌ {get_text('db_disconnected')}")
         
         st.markdown("---")
-        st.markdown(f"### {get_text('contact')}")
-        st.markdown(get_text("contact_email"))
+        if not is_enterprise_user():
+            st.markdown(f"### {get_text('contact')}")
+            st.markdown(get_text("contact_email"))
     
     # 右上角语言切换和齿轮
     col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
@@ -2238,6 +2260,10 @@ def main():
         if st.button("⚙️", key="settings_btn"):
             admin_settings_dialog()
     
+    if is_enterprise_user():
+        org_name = enterprise_display_name()
+        if org_name:
+            st.markdown(f"## 🏢 {org_name}")
     st.title(get_text("app_title"))
     st.caption(get_text("app_subtitle"))
     

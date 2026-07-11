@@ -4,11 +4,13 @@ from __future__ import annotations
 import io
 import re
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import quote
 
-import pandas as pd
 import requests
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 KNOWLEDGE_CATEGORIES = ["光学", "机械", "材料", "热学", "电气", "控制", "其他"]
 KB_CATEGORY_HEADERS = [
@@ -343,7 +345,9 @@ class SupabaseKnowledgeDB:
             return self.knowledge_zh
         return self.knowledge_en
 
-    def export_to_dataframe(self) -> pd.DataFrame:
+    def export_to_dataframe(self) -> "pd.DataFrame":
+        import pandas as pd
+
         max_len = max((len(self.knowledge_zh.get(cat, [])) for cat in self.categories), default=0)
         export_data = {}
         for cat in self.categories:
@@ -351,7 +355,7 @@ class SupabaseKnowledgeDB:
             export_data[cat] = items + [""] * (max_len - len(items))
         return pd.DataFrame(export_data)
 
-    def import_from_dataframe(self, df: pd.DataFrame) -> int:
+    def import_from_dataframe(self, df: "pd.DataFrame") -> int:
         rows: List[Dict[str, str]] = []
         for column in df.columns:
             category = normalize_category(column)
@@ -364,6 +368,8 @@ class SupabaseKnowledgeDB:
         return self.import_rows(rows, replace_existing=True)
 
     def import_from_excel_bytes(self, file_bytes: bytes) -> int:
+        import pandas as pd
+
         rows = parse_wide_kb_excel(file_bytes)
         if not rows:
             legacy_df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
