@@ -460,6 +460,11 @@ TEXTS = {
         "rules_title": "关联规则挖掘",
         
         "analyzing": "AI正在分析中，请稍候...",
+        "progress_preparing": "准备分析输入...",
+        "progress_kb": "检索知识库案例...",
+        "progress_web": "联网搜索补充信息...",
+        "progress_llm": "AI 深度推理分析中...",
+        "progress_finishing": "生成鱼骨图与结论...",
         "success": "分析完成！",
         "error": "分析失败，请重试",
         "fill_required": "请填写产品名称和故障现象",
@@ -649,6 +654,11 @@ TEXTS = {
         "rules_title": "Association Rule Mining",
         
         "analyzing": "AI is analyzing, please wait...",
+        "progress_preparing": "Preparing analysis input...",
+        "progress_kb": "Searching knowledge base...",
+        "progress_web": "Running web search...",
+        "progress_llm": "Running AI deep analysis...",
+        "progress_finishing": "Building fishbone and conclusions...",
         "success": "Analysis completed!",
         "error": "Analysis failed, please retry",
         "fill_required": "Please fill in product name and symptom",
@@ -2023,8 +2033,15 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
                  timeseries_df: pd.DataFrame = None,
                  enable_web: bool = True,
                  enable_rules: bool = True,
-                 analyst_name: str = "", analyst_title: str = "") -> FailureAnalysisResult:
+                 analyst_name: str = "", analyst_title: str = "",
+                 progress_bar=None) -> FailureAnalysisResult:
     """执行故障分析（双语架构）"""
+
+    def _progress(pct: int, zh_text: str, en_text: str) -> None:
+        if progress_bar is not None:
+            progress_bar.progress(pct, text=zh_text if lang == "zh" else en_text)
+
+    _progress(10, "准备分析输入...", "Preparing analysis input...")
     
     # 1. 翻译用户输入为英文（用于分析核心）
     symptom_en = translate_to_en(symptom) if is_chinese(symptom) else symptom
@@ -2032,6 +2049,7 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     installation_en = translate_to_en(installation) if installation and is_chinese(installation) else installation
     
     # 2. 双语检索（中文优先，英文补充）
+    _progress(25, "检索知识库案例...", "Searching knowledge base...")
     context_parts = []
     
     kb = get_runtime_knowledge_db()
@@ -2046,6 +2064,7 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
         context_parts.append("【English Knowledge Base】\n" + "\n".join(f"- {remove_bold_markers(r[:200])}" for r in kb_results_en[:5]))
     
     if enable_web:
+        _progress(45, "联网搜索补充信息...", "Running web search...")
         web_results = web_search_dual(symptom, lang)
         if web_results and "未找到" not in web_results:
             context_parts.append(web_results)
@@ -2056,6 +2075,7 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     stage, _ = classify_stage(symptom)
     
     # 4. 一次LLM调用输出双语分析结果
+    _progress(65, "AI 深度推理分析中...", "Running AI deep analysis...")
     bilingual_result = call_bilingual_analysis(
         product_name_en, symptom_en, installation_en, temperature, context_info
     )
@@ -2103,6 +2123,7 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
     )
     
     # 7. 生成鱼骨图图片
+    _progress(85, "生成鱼骨图与结论...", "Building fishbone and conclusions...")
     fishbone_image = create_fishbone_image(fishbone, lang)
     
     # 8. SPC分析
@@ -2116,6 +2137,7 @@ def run_analysis(product_name: str, symptom: str, project_name: str,
         association_rules = mine_association_rules_bilingual(symptom_en, installation_en, temperature, lang)
     
     # 10. 返回结果
+    _progress(100, "分析完成", "Analysis complete")
     return FailureAnalysisResult(
         case_id=str(uuid.uuid4())[:8],
         project_name=project_name,
@@ -2205,7 +2227,10 @@ def main():
             st.markdown(get_text("contact_email"))
     
     # 右上角语言切换和齿轮
-    col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
+    if is_enterprise_user():
+        col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+    else:
+        col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
     with col3:
         if st.button(get_text("lang_zh"), key="zh_btn"):
             set_app_language("zh")
@@ -2214,9 +2239,10 @@ def main():
         if st.button(get_text("lang_en"), key="en_btn"):
             set_app_language("en")
             st.rerun()
-    with col5:
-        if st.button("⚙️", key="settings_btn"):
-            admin_settings_dialog()
+    if not is_enterprise_user():
+        with col5:
+            if st.button("⚙️", key="settings_btn"):
+                admin_settings_dialog()
     
     render_enterprise_main_brand()
     st.title(get_text("app_title"))
@@ -2336,7 +2362,9 @@ def main():
     st.markdown("---")
     
     # ==================== 分析按钮（扣费）====================
-    if st.button(get_text("analyze_btn"), type="primary", use_container_width=True):
+    analyze_clicked = st.button(get_text("analyze_btn"), type="primary", use_container_width=True)
+    progress_slot = st.empty()
+    if analyze_clicked:
         if not product_name or not symptom:
             st.error(get_text("fill_required"))
         else:
@@ -2355,28 +2383,30 @@ def main():
                 if not success:
                     st.error(error_msg)
                 else:
-                    with st.spinner(get_text("analyzing")):
-                        try:
-                            result = run_analysis(
-                                product_name=product_name,
-                                symptom=symptom,
-                                project_name=st.session_state.project_name,
-                                installation=installation,
-                                temperature=temperature,
-                                lang=st.session_state.lang,
-                                timeseries_df=timeseries_df if enable_timeseries else None,
-                                enable_web=enable_web,
-                                enable_rules=enable_rules,
-                                analyst_name=st.session_state.analyst_name,
-                                analyst_title=st.session_state.analyst_title
-                            )
-                            st.session_state.result = result
-                            st.session_state.current_report = None
-                            st.session_state.analysis_completed = True
-                            st.success(get_text("success"))
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"{get_text('error')}: {str(e)}")
+                    progress_bar = progress_slot.progress(0, text=get_text("progress_preparing"))
+                    try:
+                        result = run_analysis(
+                            product_name=product_name,
+                            symptom=symptom,
+                            project_name=st.session_state.project_name,
+                            installation=installation,
+                            temperature=temperature,
+                            lang=st.session_state.lang,
+                            timeseries_df=timeseries_df if enable_timeseries else None,
+                            enable_web=enable_web,
+                            enable_rules=enable_rules,
+                            analyst_name=st.session_state.analyst_name,
+                            analyst_title=st.session_state.analyst_title,
+                            progress_bar=progress_bar,
+                        )
+                        st.session_state.result = result
+                        st.session_state.current_report = None
+                        st.session_state.analysis_completed = True
+                        st.success(get_text("success"))
+                        st.rerun()
+                    except Exception as e:
+                        progress_slot.empty()
+                        st.error(f"{get_text('error')}: {str(e)}")
     
     # ==================== 显示结果 ====================
     if st.session_state.result and st.session_state.analysis_completed:
